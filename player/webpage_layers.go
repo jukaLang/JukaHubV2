@@ -829,7 +829,13 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 		info = l.doc.Layers[g.layer-1]
 	} else {
 		info = webLayerInfo{style: first.Style, outerBoxes: len(first.Boxes), key: webFreeStackKey(first.ZIndex, first.TreeSeq)}
-		if first.OwnsBox && info.outerBoxes > 0 {
+		// A positioned picture's block owns the box of the element around it
+		// (ensureBlock built it there), not a box of its own: keep that wrapper
+		// in the anchor chain. This is the second half of addImageElement's
+		// positioned-image case (webpage_inline.go), which turns the picture
+		// into this lone layer; dropping the wrapper here placed Wikipedia's
+		// absolutely positioned globe against the page, not the wordmark block.
+		if first.OwnsBox && !first.Image && info.outerBoxes > 0 {
 			info.outerBoxes--
 		}
 		if first.Image {

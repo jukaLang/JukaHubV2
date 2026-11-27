@@ -293,6 +293,27 @@ func portFirmwareEnv(config *Config) []string {
 	return portUdevShimEnv(mergeGameProfileEnv(out, pin))
 }
 
+// portEnvDropShellVars is env without the variables that change how a shell
+// behaves from outside the script: bash's own option list (SHELLOPTS), which
+// every bash started from another bash inherits — a port script without a
+// `set -u` of its own then ends at its first `$1` with "unbound variable" —
+// its BASHOPTS, and the files BASH_ENV and ENV make it run before the port
+// starts. The firmware's Ports tab starts a port from a plain sh, which has
+// none of them: a port gets the same from JukaHub (report JH-ZBPUTA, a port
+// that quit after 700 ms with "line 5: $1: unbound variable").
+func portEnvDropShellVars(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "SHELLOPTS", "BASHOPTS", "BASH_ENV", "ENV":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // portEnvOverrides reads data/ports.env; nil when there is none.
 func portEnvOverrides() map[string]string {
 	dir, err := P().DataDir()
@@ -356,6 +377,9 @@ func portBuildLaunchPlan(config *Config, script string, master bool) portLaunchP
 		plan.Env = mergeGameProfileEnv(plan.Env, over)
 		plan.Notes = append(plan.Notes, fmt.Sprintf("%d variable(s) from %s", len(over), portEnvFileName))
 	}
+	// Last, so neither JukaHub's own environment nor data/ports.env can hand a
+	// port a shell's option set (portEnvDropShellVars).
+	plan.Env = portEnvDropShellVars(plan.Env)
 	return plan
 }
 

@@ -26,6 +26,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -458,8 +459,16 @@ type imapConn struct {
 
 // mailTLSConfig checks the server's certificate for host against the system
 // roots and the firmware fallback.
+// mailTestRoots, when set, is the trust store the mail clients use. Only a
+// test sets it, to trust the certificate of a loopback server.
+var mailTestRoots func() *x509.CertPool
+
 func mailTLSConfig(host string) *tls.Config {
 	cfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+	if mailTestRoots != nil {
+		cfg.RootCAs = mailTestRoots()
+		return cfg
+	}
 	if pool := bugrepRootCAs(); pool != nil {
 		cfg.RootCAs = pool
 	}

@@ -55,6 +55,14 @@ func (e *caldavStatusError) Error() string {
 	return fmt.Sprintf("%s answered HTTP %d", e.host, e.code)
 }
 
+// caldavConflictError reports a 412 Precondition Failed: the server's copy
+// changed since we read it. The caller must re-sync and retry.
+type caldavConflictError struct{ host string }
+
+func (e *caldavConflictError) Error() string {
+	return fmt.Sprintf("%s: the event changed on the server; re-sync and retry", e.host)
+}
+
 // caldavClient is one sign-in to one server.
 type caldavClient struct {
 	origin *url.URL
@@ -105,6 +113,7 @@ type caldavProp struct {
 		} `xml:"urn:ietf:params:xml:ns:caldav comp"`
 	} `xml:"urn:ietf:params:xml:ns:caldav supported-calendar-component-set"`
 	CalendarData string `xml:"urn:ietf:params:xml:ns:caldav calendar-data"`
+	GetETag      string `xml:"DAV: getetag"`
 }
 
 // ok reports whether a propstat's status line is a 2xx (a missing status
@@ -214,31 +223,42 @@ func (c *caldavClient) caldavSameSite(u *url.URL) bool {
 
 // do sends one WebDAV request with the password, following redirects by
 // hand, and returns the body of a 2xx answer (bounded).
-func (c *caldavClient) do(ctx context.Context, method, rawURL, depth, body string) ([]byte, *url.URL, error) {
+// doRaw sends one WebDAV request like do, but returns the HTTP status code and
+// response headers instead of turning a non-2xx answer into an error. Used by
+// the write-back path, which needs to tell 412 Precondition Failed from
+// success. contentType is the request Content-Type (empty => application/xml);
+// extra holds additional request headers (If-Match, If-None-Match, ...).
+func (c *caldavClient) doRaw(ctx context.Context, method, rawURL, depth, body, contentType string, extra map[string]string) ([]byte, *url.URL, int, http.Header, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, nil, errors.New("the CalDAV address is not valid")
+		return nil, nil, 0, nil, errors.New("the CalDAV address is not valid")
+	}
+	if contentType == "" {
+		contentType = `application/xml; charset="utf-8"`
 	}
 	for hop := 0; ; hop++ {
 		if err := caldavCheckURL(u); err != nil {
-			return nil, u, err
+			return nil, u, 0, nil, err
 		}
 		if !c.caldavSameSite(u) {
-			return nil, u, fmt.Errorf("the server sent the calendar to another site (%s); not following it with your password", u.Hostname())
+			return nil, u, 0, nil, fmt.Errorf("the server sent the calendar to another site (%s); not following it with your password", u.Hostname())
 		}
 		req, err := http.NewRequestWithContext(ctx, method, u.String(), strings.NewReader(body))
 		if err != nil {
-			return nil, u, err
+			return nil, u, 0, nil, err
 		}
 		req.SetBasicAuth(c.user, c.pass)
-		req.Header.Set("Content-Type", `application/xml; charset="utf-8"`)
+		req.Header.Set("Content-Type", contentType)
 		req.Header.Set("User-Agent", "JukaHub/"+versionString(nil))
 		if depth != "" {
 			req.Header.Set("Depth", depth)
 		}
+		for k, v := range extra {
+			req.Header.Set(k, v)
+		}
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return nil, u, err
+			return nil, u, 0, nil, err
 		}
 		data, rerr := io.ReadAll(io.LimitReader(resp.Body, caldavMaxXML+1))
 		resp.Body.Close()
@@ -246,25 +266,100 @@ func (c *caldavClient) do(ctx context.Context, method, rawURL, depth, body strin
 		case resp.StatusCode >= 300 && resp.StatusCode < 400:
 			loc := resp.Header.Get("Location")
 			if loc == "" || hop >= caldavMaxRedirects {
-				return nil, u, &caldavStatusError{code: resp.StatusCode, host: u.Hostname()}
+				return data, u, resp.StatusCode, resp.Header, &caldavStatusError{code: resp.StatusCode, host: u.Hostname()}
 			}
 			next, perr := u.Parse(loc)
 			if perr != nil {
-				return nil, u, errors.New("the server sent a broken redirect")
+				return data, u, resp.StatusCode, resp.Header, errors.New("the server sent a broken redirect")
 			}
 			u = next
 			continue
-		case resp.StatusCode < 200 || resp.StatusCode >= 300:
-			return nil, u, &caldavStatusError{code: resp.StatusCode, host: u.Hostname()}
 		}
 		if rerr != nil {
-			return nil, u, rerr
+			return data, u, resp.StatusCode, resp.Header, rerr
 		}
 		if len(data) > caldavMaxXML {
-			return nil, u, errors.New("the server's answer is too large")
+			return data, u, resp.StatusCode, resp.Header, errors.New("the server's answer is too large")
 		}
-		return data, u, nil
+		return data, u, resp.StatusCode, resp.Header, nil
 	}
+}
+
+// do keeps its old contract: a 2xx body, or an error. It is now a thin wrapper
+// over doRaw.
+func (c *caldavClient) do(ctx context.Context, method, rawURL, depth, body string) ([]byte, *url.URL, error) {
+	data, base, status, _, err := c.doRaw(ctx, method, rawURL, depth, body, "", nil)
+	if err != nil {
+		return data, base, err
+	}
+	if status < 200 || status >= 300 {
+		host := ""
+		if base != nil {
+			host = base.Hostname()
+		}
+		return data, base, &caldavStatusError{code: status, host: host}
+	}
+	return data, base, nil
+}
+
+// putEvent creates or updates one event resource. etag is the resource's
+// current ETag for an update (sent as If-Match); pass "" to create (sent as
+// If-None-Match: *). Returns the new ETag from the response (or the supplied
+// one when the server omits it).
+func (c *caldavClient) putEvent(ctx context.Context, href, ics, etag string) (string, error) {
+	extra := map[string]string{}
+	if etag == "" {
+		extra["If-None-Match"] = "*"
+	} else {
+		extra["If-Match"] = etag
+	}
+	extra["Content-Type"] = `text/calendar; charset="utf-8"`
+	data, base, status, hdr, err := c.doRaw(ctx, "PUT", href, "", ics, `text/calendar; charset="utf-8"`, extra)
+	_ = data
+	_ = base
+	if err != nil {
+		return etag, err
+	}
+	if status == 412 {
+		return etag, &caldavConflictError{host: hostOf(base, href)}
+	}
+	if status < 200 || status >= 300 {
+		return etag, &caldavStatusError{code: status, host: hostOf(base, href)}
+	}
+	if ne := strings.TrimSpace(hdr.Get("ETag")); ne != "" {
+		return ne, nil
+	}
+	return etag, nil
+}
+
+// deleteEvent removes one event resource. etag, when non-empty, is sent as
+// If-Match; an empty etag deletes unconditionally.
+func (c *caldavClient) deleteEvent(ctx context.Context, href, etag string) error {
+	extra := map[string]string{}
+	if etag != "" {
+		extra["If-Match"] = etag
+	}
+	_, base, status, _, err := c.doRaw(ctx, "DELETE", href, "", "", "", extra)
+	if err != nil {
+		return err
+	}
+	if status == 412 {
+		return &caldavConflictError{host: hostOf(base, href)}
+	}
+	if status < 200 || status >= 300 {
+		return &caldavStatusError{code: status, host: hostOf(base, href)}
+	}
+	return nil
+}
+
+func hostOf(base *url.URL, href string) string {
+	if base != nil {
+		return base.Hostname()
+	}
+	if u, err := url.Parse(href); err == nil {
+		return u.Hostname()
+	}
+	return ""
 }
 
 // propfind runs a PROPFIND and parses its multistatus. base is the URL that
@@ -418,7 +513,7 @@ func (c *caldavClient) events(ctx context.Context, cal caldavCalendarInfo, from,
 		`<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">` +
 		`<c:time-range start="` + caldavUTC(from) + `" end="` + caldavUTC(to) + `"/>` +
 		`</c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`
-	data, _, err := c.do(ctx, "REPORT", cal.URL, "1", body)
+	data, base, err := c.do(ctx, "REPORT", cal.URL, "1", body)
 	if err != nil {
 		return nil, err
 	}
@@ -426,11 +521,11 @@ func (c *caldavClient) events(ctx context.Context, cal caldavCalendarInfo, from,
 	if err != nil {
 		return nil, err
 	}
-	return caldavEventsFrom(ms, from, to), nil
+	return caldavEventsFrom(ms, base, from, to), nil
 }
 
 // caldavEventsFrom expands every calendar-data of a REPORT answer. Pure.
-func caldavEventsFrom(ms *caldavMultistatus, from, to time.Time) []calEvent {
+func caldavEventsFrom(ms *caldavMultistatus, base *url.URL, from, to time.Time) []calEvent {
 	var out []calEvent
 	for _, r := range ms.Responses {
 		p := r.props()
@@ -441,7 +536,15 @@ func caldavEventsFrom(ms *caldavMultistatus, from, to time.Time) []calEvent {
 		if err != nil {
 			continue
 		}
-		out = append(out, cal.expand(from, to, icsMaxInstances-len(out))...)
+		resURL := caldavResolve(base, r.Href)
+		etag := strings.TrimSpace(p.GetETag)
+		expanded := cal.expand(from, to, icsMaxInstances-len(out))
+		for i := range expanded {
+			expanded[i].URL = resURL
+			expanded[i].ETag = etag
+			expanded[i].SourceKind = "caldav"
+		}
+		out = append(out, expanded...)
 		if len(out) >= icsMaxInstances {
 			break
 		}

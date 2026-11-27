@@ -113,6 +113,7 @@ const (
 	steamSheetUninstall
 	steamSheetTarget
 	steamSheetStore
+	steamSheetAchievements
 	steamSheetClose
 	// The PortMaster port's rows (steam_ports.go) and playing on a PC when
 	// A plays the port.
@@ -978,6 +979,7 @@ func steamSheetRows() []steamSheetRow {
 		rows = append(rows, steamSheetRow{label: "Install on: " + pc.name + " (change)", action: steamSheetTarget})
 	}
 	if !shortcut {
+		rows = append(rows, steamSheetRow{label: "Achievements", action: steamSheetAchievements})
 		store := "Store page"
 		if !steamPanel.local {
 			store = "Store page on your phone (QR)"
@@ -1063,6 +1065,10 @@ func steamSheetActivate() {
 			return
 		}
 		qrZoomOpenCardDetail(code, g.Name+" · Steam store", "Scan with your phone to open the store page")
+	case steamSheetAchievements:
+		steamPanel.sheet = false
+		steamAchStart(g)
+		openCommunityPanel(appConfig, communityPageSteamAch)
 	case steamSheetClose:
 		steamPanel.sheet = false
 		PlayBackSound()
@@ -1881,15 +1887,19 @@ func steamDrawTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y,
 		}
 		label := t.label() + " " + strconv.Itoa(counts[t])
 		tw, _, _ := font.SizeUTF8(label)
-		r := sdl.Rect{X: cx, Y: y + 2, W: int32(tw) + 24, H: h}
-		if r.X+r.W > x+w {
+		if avail := x + w - cx; avail < int32(tw)+24 && avail >= 64 {
+			label = ellipsize(font, label, avail-24)
+			tw, _, _ = font.SizeUTF8(label)
+		} else if avail < 64 {
 			break
 		}
+		r := sdl.Rect{X: cx, Y: y + 2, W: int32(tw) + 24, H: h}
 		steamTabRects[t] = r
 		color := ColorTextSecondary()
 		if t == steamPanel.tab {
 			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, r.H/2, WithAlpha(installHighlight(), 60))
 			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, r.H/2, 1, installHighlight())
+			drawTabUnderline(renderer, r)
 			color = ColorTextPrimary()
 		} else {
 			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, r.H/2, WithAlpha(ColorSurfaceRow, 160))

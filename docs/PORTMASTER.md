@@ -58,7 +58,9 @@ in Games) shows:
   in PortMaster's `libs/` folder — JukaHub downloads it before the port starts
   (Wi-Fi), or **Update**;
 - the game's own data folder empty — many ports need files you own (a Steam
-  or GOG copy); the port's install note and `README.md` say which;
+  or GOG copy). The card names the folder the files go in (**Copy to:**) and,
+  when the port's script checks for one, the file it stops without; see
+  [Where a port's game files go](#where-a-ports-game-files-go);
 - the last lines of the port's `log.txt`, or of JukaHub's own launch log for
   it when the script died before writing one.
 
@@ -332,6 +334,42 @@ On the inspected card, the installed zip's MD5 was in `port.json` under
 `attr.min_glibc` above the firmware's GLIBC is marked incompatible before it
 starts, with the required version shown in **Why didn't it start?**.
 
+## Where a port's game files go
+
+A port that runs the original game needs that game's files from you. On TrimUI
+PortMaster installs the port in `Data/ports/<port>/` (its default ports
+folder), and your files go in one of two places:
+
+- **the port's `gamedata` folder** — `Data/ports/<port>/gamedata/` — which most
+  ports use (a few call it `data`, `assets` or `game`);
+- **the port's own folder** — `Data/ports/<port>/` — for a port with no such
+  folder that looks for the game's folders directly (Half-Life wants
+  `Data/ports/Half-Life/valve/halflife.wad`).
+
+**Why didn't it start?** (Y on the port, or *Check why it won't start* on its
+page in Games) says which: **Copy to:** is the folder, and the text under it
+names the file the port stops without. The port's own `README.md`, beside its
+`port.json`, lists the files and which store's copy to use. A port's page in
+the Ports Store names the folder too, once it is installed.
+
+Copy the **contents** of the game's folder, keeping the game's own folders
+inside it — for Half-Life, your copy's `valve` folder, so that
+`Data/ports/Half-Life/valve/halflife.wad` exists. A copy that lands one folder
+too deep (`gamedata/Half-Life/valve/…`, or an extra `Half-Life` folder) is the
+usual reason the port still stops. Start the port again when the copy is done.
+
+The card is an ordinary folder on the SD card, so the copy can be made:
+
+- with the card in a PC, at that same path on the card's drive (for example
+  `E:\Data\ports\Half-Life\gamedata`);
+- over Wi-Fi from the handheld's **Files**, a paired PC's drop folder, or USB
+  file transfer ([USB_FILE_TRANSFER.md](USB_FILE_TRANSFER.md));
+- from **Apps → Steam** for a port matched to a game in your PC's Steam
+  library: **Copy files from <PC>** puts it in the right folder by itself (see
+  [Steam games you own](#steam-games-you-own)).
+
+A *Ready to Run* port needs none of this.
+
 ## The catalogue
 
 **X** shows PortMaster's live catalogue. Its first row opens the **Ports
@@ -358,8 +396,9 @@ Mega Drive, PICO-8 … — come from [Get Homebrew](HOMEBREW.md) instead):
 
 A card shows the port's screenshot, title, whether it needs your game files
 and its download count. **A** opens the details: the big screenshot, porters,
-genres, size, dates, the description, what the port needs from you, its
-runtimes and whether its own metadata says it can run here, with **Install**,
+genres, size, dates, the description, what the port needs from you, the folder
+its game files go in (once it is installed), its runtimes and whether its own
+metadata says it can run here, with **Install**,
 **Play**, **Update/Reinstall**, **Uninstall** (press twice) and **Why didn't it
 start?**.
 
@@ -447,9 +486,9 @@ path. See [MINECRAFT.md](MINECRAFT.md).
 
 | Symptom | Look at |
 |---------|---------|
-| Black screen, back to JukaHub after a second | The "didn't start" card opens by itself for a port that ends within 8 seconds without being quit (within 20 when its logs name a cause): it names the cause it read in the logs (BusyBox's sh, PortMaster not found or missing files of its own, newer glibc, missing library, graphics, crash, memory, runtime, a saved sign-in the port could not read) or shows the port's last lines. Lines every launch prints on a card without TRIMUI_EX — `control.txt` unable to source `ex_config`, `sdl2imgshow: command not found` — are not a cause: bash goes on past them. Later: **Why didn't it start?**; `data/gamediag/ports/<script>.log` and the port's `log.txt` |
+| Black screen, back to JukaHub after a second | The "didn't start" card opens by itself for a port that ends within 8 seconds without being quit (within 20 when its logs name a cause): it names the cause it read in the logs (BusyBox's sh, PortMaster not found or missing files of its own, newer glibc, missing library, graphics, crash, memory, runtime, a saved sign-in the port could not read) or the game's own data the script checks for and does not find (Half-Life's `valve/halflife.wad`), else shows the port's last lines. Lines every launch prints on a card without TRIMUI_EX — `control.txt` unable to source `ex_config`, `sdl2imgshow: command not found` — are not a cause: bash goes on past them. Later: **Why didn't it start?**; `data/gamediag/ports/<script>.log` and the port's `log.txt` |
 | "No such file" for a `.squashfs` | The runtime is missing: open PortMaster with Wi-Fi, or **Update** |
-| The port starts but its folder is empty | It needs your game files; see its `README.md` |
+| The port starts but its folder is empty | It needs your game files: **Why didn't it start?** names the folder (**Copy to:**) and the file it waits for. Copy the game's folders into it and start the port again — see [Where a port's game files go](#where-a-ports-game-files-go) |
 | Buttons swapped or wrong | PortMaster's device probe; try `portLaunchVia: firmware` (if your card has `Emus/PORTS`) and report the log |
 | Saves land in `Apps/PortMaster/` | The XDG fallback was used; the port log says why the link could not be made |
 | PortMaster closes at once | The toast and `data/gamediag/ports/PortMaster.log` |

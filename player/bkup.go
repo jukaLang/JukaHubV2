@@ -7,7 +7,8 @@ package main
 // platform and the folders the backup was made from), the config document
 // (cfgdoc.go), the user config, the theme files, the plugins, the input
 // profiles, the experience packs and the library's stores — favourites,
-// recents, playtime and trophies, alarms, notes, saved chat notes, the words
+// recents, playtime and trophies, the game page's statuses and notes, alarms,
+// notes, saved chat notes, the words
 // the keyboard learned, bookmarks, package records — and, only when asked, the
 // game saves. No ROMs and no media: the file is a setup, not a library, and it
 // fits on any card or in any mail.
@@ -153,6 +154,16 @@ func bkupSources() []bkupSource {
 		{bkupCatLibrary, "app", synthStoreFile, false},
 		{bkupCatLibrary, "data", padsStoreFile, false},
 		{bkupCatLibrary, "data", "game-recents.json", false},
+		// The game page's own record: status, rating, notes and milestones.
+		// It lives in a subfolder, so the generic data-folder pass above does
+		// not see it (bkupCollectStoreFiles).
+		{bkupCatLibrary, "data", "game-meta/games.json", false},
+		// Playtime has its own files since LIB-13 (playtime_store.go): the
+		// snapshot, the session log and the per-day store, so a restore keeps
+		// the history now that it no longer rides in jukauser.json.
+		{bkupCatLibrary, "data", playtimeFileName, false},
+		{bkupCatLibrary, "data", playtimeSessionsFileName, false},
+		{bkupCatLibrary, "data", playtimePeriodsFileName, false},
 		{bkupCatLibrary, "data", "game-options.json", false},
 		{bkupCatLibrary, "data", "game-launchers.json", true},
 		{bkupCatLibrary, "data", "vk-words.json", false},
@@ -1431,9 +1442,9 @@ func bkupCurrentUserConfig(config *Config) *UserConfig {
 		return cached
 	}
 	current.Variables.Custom = bkupCopyMap(current.Variables.Custom)
-	if playtime.loaded {
-		current.Variables.Custom[playtimeCustomKey] = playtime.data
-	}
+	// Playtime is its own file now, so a backup's user config does not carry
+	// it and a restore cannot put a stale snapshot back into the config.
+	delete(current.Variables.Custom, playtimeCustomKey)
 	if cached != nil {
 		current.Favorites, current.Chat, current.JukaLand = cached.Favorites, cached.Chat, cached.JukaLand
 	}
@@ -1525,6 +1536,14 @@ func bkupReloadStores(config *Config) {
 	loadFavorites()
 	playtimeInit(config)
 	loadChatMessages()
+	// The game page's record and the launch history: a restore must not let
+	// an in-memory copy write the old statuses or sessions back over them.
+	gmetaStore.mu.Lock()
+	gmetaStore.loaded = false
+	gmetaStore.mu.Unlock()
+	gameHistoryStore.mu.Lock()
+	gameHistoryStore.loaded = false
+	gameHistoryStore.mu.Unlock()
 	rpMutex.Lock()
 	recentlyPlayed = map[string]bool{}
 	rpMutex.Unlock()

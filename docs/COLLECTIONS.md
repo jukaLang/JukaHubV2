@@ -2,7 +2,8 @@
 
 JukaHub keeps a few game lists up to date by itself: the games you played
 last, the ones you play most, every game in one list, the games for two
-players. They are folders on the **Collections** tab of the
+players, and the three lists from your game statuses — Backlog, Playing now
+and Beaten this year. They are folders on the **Collections** tab of the
 Tabs Home ([The Tabs Home](HOME_TABS.md)). They are new and **not yet checked on
 a TrimUI**.
 
@@ -15,6 +16,9 @@ a TrimUI**.
 | **All games** | Every game of every console in one list, A to Z. | Yes |
 | **Recently added** | The 30 games that turned up on the card last. | Yes |
 | **Never played** | Up to 120 games you have not started yet, A to Z. | Yes |
+| **Backlog** | Games tagged Backlog on their game page, waiting longest first. | Yes |
+| **Playing now** | Games tagged Playing, most recently played first. | Yes |
+| **Beaten this year** | Games tagged Completed this year, newest first. | Yes |
 | **Multiplayer** | Games for two players or more. | No |
 | **Genres** | One folder per genre with at least three games (Platform, Racing…), up to 24. | No |
 
@@ -29,6 +33,30 @@ hidden games, and in Kid mode only the kids' games are listed
 and player count JukaHub looks up in the libretro database when you open the
 game's page online ([Game library](GAME_LIBRARY.md)). A game whose page was
 never opened online has no details yet, so these folders grow as you browse.
+
+**Backlog**, **Playing now** and **Beaten this year** read the tags you set on
+the game page (its Tags button). They need no download and no scan: marking a
+game Backlog or Playing puts it in the folder at once. **Beaten this year**
+uses the date the game was first tagged Completed, so a game you finished last
+year stays out until the new year. Each folder holds at most 30 games.
+
+Games Library → **Select → Next up from your backlog** opens the backlog game
+that has waited longest, so the Backlog folder doubles as a queue. The menu
+row names the suggestion and its wait; a tie is broken by title. The status is
+also shown on the library's list rows and grid cards, beside the console or
+the file name.
+
+The game page's **Tags** button offers six statuses: Favorite, Playing,
+Completed, Backlog, Wishlist and Dropped. When a game carries more than one,
+the card shows the most active one — Playing, Backlog, Wishlist, Dropped,
+Completed, then Favorite. Only Backlog and Playing feed a folder; Wishlist and
+Dropped are for your own record.
+
+The phone's **Games** card can set the same status, a 1–5 rating and a note:
+tap a game and use the Journal fields. Both ends read and write the game
+page's own record, so a note typed on the phone is on the handheld at once.
+The phone routes (`/api/games/journal`) sit behind the companion PIN like the
+rest of that card.
 
 ## Turning them on and off
 

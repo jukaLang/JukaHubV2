@@ -137,6 +137,10 @@ func renderGameCoverBrowser(renderer *sdl.Renderer, config *Config, system libra
 		textX := art.X + art.W + 15
 		textW := rect.X + rect.W - textX - 12
 		titleScrollText(renderer, config, medium, system.Games[idx].Label(), ColorTextPrimary(), textX, rect.Y+18, textW, idx == gameLib.cursor && gameLib.focus == 1)
-		renderText(renderer, config, font, ellipsize(font, consoleDisplayName(system.Games[idx].System), textW), ColorTextTertiary(), textX, rect.Y+18+int32(medium.Height())+8)
+		detail := consoleDisplayName(system.Games[idx].System)
+		if status := system.Games[idx].JournalStatus; status != "" {
+			detail += " · " + status
+		}
+		renderText(renderer, config, font, ellipsize(font, detail, textW), ColorTextTertiary(), textX, rect.Y+18+int32(medium.Height())+8)
 	}
 }

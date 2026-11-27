@@ -63,10 +63,6 @@ cd tests/e2e
 npm ci && npx playwright install chromium && npx playwright test
 ```
 
-One test (`TestVideoFullscreenHidesControlBar`) is known to crash
-intermittently under the native SDL renderer; if it crashes on you, re-run
-once before digging — see [CONTRIBUTING.md](../CONTRIBUTING.md#set-up).
-
 ## 5. Open a pull request
 
 The [pull request template](../.github/PULL_REQUEST_TEMPLATE.md) walks you

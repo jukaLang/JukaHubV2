@@ -179,6 +179,21 @@ func portDataDirCandidates(script string) []string {
 	return dedupeCleanPaths(out)
 }
 
+// portGameDataFolder is where a port that runs the original game's data takes
+// the player's files: its gamedata folder (a few ports call it data, assets or
+// game), else the port's own folder. sub is that folder's name, "" for the
+// port's own.
+func portGameDataFolder(dir string) (folder, sub string) {
+	for _, name := range []string{"gamedata", "data", "assets", "game"} {
+		if p, ok := gameDiagFileIn(dir, name); ok {
+			if info, err := os.Stat(p); err == nil && info.IsDir() {
+				return p, name
+			}
+		}
+	}
+	return dir, ""
+}
+
 var portMetaCache struct {
 	mu sync.Mutex
 	m  map[string]portMetaCached

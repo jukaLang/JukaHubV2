@@ -161,6 +161,9 @@ func (s *companionServer) registerLibraryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/games/saves.zip", s.guard(s.handleGamesSavesZip))
 	mux.HandleFunc("/api/games/saves/upload", s.guard(s.handleGamesSaveUpload))
 	mux.HandleFunc("/api/games/restore", s.guard(s.handleGamesRestore))
+	// The Journal fields: status, rating and note from the phone
+	// (companion_journal.go).
+	mux.HandleFunc("/api/games/journal", s.guard(s.handleGamesJournal))
 }
 
 // handleGamesPage serves /games.
@@ -534,7 +537,8 @@ body{padding:calc(14px + env(safe-area-inset-top)) 16px calc(40px + env(safe-are
 h1{font-size:20px;margin:0 0 4px}
 h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:18px 0 8px}
 .note{color:var(--dim);font-size:14px;margin:0 0 10px}
-input,select{width:100%;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:16px system-ui,-apple-system,sans-serif}
+input,select,textarea{width:100%;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:16px system-ui,-apple-system,sans-serif}
+textarea{resize:vertical;min-height:76px;margin-top:10px}
 .bar{display:flex;gap:8px;margin:12px 0}.bar>*{flex:1}
 .game{display:flex;gap:12px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;margin:8px 0;cursor:pointer}
 .game img,.game .ph{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#1d2330;flex:none}
@@ -555,6 +559,13 @@ a{color:#a8b5ff}[hidden]{display:none!important}
   <h1 id=dTitle></h1>
   <p class=note id=dConsole></p>
   <div class=row><button id=dPlay>Play on the handheld</button><button class=ghost id=dBack>All games</button></div>
+  <h2>Journal</h2>
+  <div class=row><select id=jStatus aria-label=Status></select><select id=jRating aria-label=Rating>
+    <option value=0>No rating</option><option value=1>★</option><option value=2>★★</option>
+    <option value=3>★★★</option><option value=4>★★★★</option><option value=5>★★★★★</option>
+  </select></div>
+  <textarea id=jNote rows=3 placeholder="What did you think of it?"></textarea>
+  <div class=row><button id=jSave>Save journal</button></div>
   <h2>Saves now</h2>
   <div id=dFiles class=note>Reading…</div>
   <div class=row><a id=dZip href="#"><button class=ghost type=button>Download saves (.zip)</button></a>
@@ -611,7 +622,19 @@ async function open(g) {
   $('list').hidden = true; $('detail').hidden = false; window.scrollTo(0, 0);
   $('dTitle').textContent = g.title; $('dConsole').textContent = g.console;
   $('dZip').href = '/api/games/saves.zip?id=' + encodeURIComponent(g.id) + '&p=' + encodeURIComponent(pin);
-  await saves();
+  await journal(); await saves();
+}
+async function journal() {
+  const g = cur; if (!g) return;
+  try {
+    const d = await call('/api/games/journal?id=' + encodeURIComponent(g.id));
+    const sel = $('jStatus'); sel.textContent = '';
+    const none = document.createElement('option'); none.value = ''; none.textContent = 'No status'; sel.append(none);
+    for (const s of d.statuses) { const o = document.createElement('option'); o.value = o.textContent = s; sel.append(o); }
+    sel.value = d.game.status || '';
+    $('jRating').value = String(d.game.rating || 0);
+    $('jNote').value = d.game.note || '';
+  } catch (e) { say(e.message, true); }
 }
 async function saves() {
   const g = cur; $('dFiles').textContent = 'Reading…'; $('dMoments').textContent = 'Reading…';
@@ -638,6 +661,13 @@ async function saves() {
 $('q').oninput = draw; $('con').onchange = draw;
 $('dBack').onclick = () => { $('detail').hidden = true; $('list').hidden = false; cur = null; };
 $('dPlay').onclick = async () => { try { const d = await call('/api/games/play', {id: cur.id}); say('Starting ' + d.title + ' on the handheld.'); } catch (e) { say(e.message, true); } };
+$('jSave').onclick = async () => {
+  if (!cur) return;
+  try {
+    const d = await call('/api/games/journal', {id: cur.id, status: $('jStatus').value, rating: Number($('jRating').value), note: $('jNote').value});
+    say('Journal saved: ' + (d.game.status || 'no status') + (d.game.rating ? ', ' + d.game.rating + '/5' : '') + '.');
+  } catch (e) { say(e.message, true); }
+};
 $('dUploadBtn').onclick = () => $('dUpload').click();
 $('dUpload').onchange = async () => {
   const file = $('dUpload').files[0]; if (!file || !cur) return;

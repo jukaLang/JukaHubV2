@@ -256,7 +256,12 @@ func portMasterEmuEntry() emuEntry {
 // startPortMasterInstall downloads the official TrimUI package and unpacks it
 // into Apps/PortMaster. The download runs in the background so the panel and
 // the install banner stay responsive.
-func startPortMasterInstall() error {
+func startPortMasterInstall() error { return startPortMasterInstallThen(nil) }
+
+// startPortMasterInstallThen is startPortMasterInstall that tells then, on the
+// main thread, how the install ended: a port's start waits for the files
+// (portMasterGate).
+func startPortMasterInstallThen(then func(error)) error {
 	if IsWindows() {
 		return fmt.Errorf("PortMaster runs on the handheld, not on Windows")
 	}
@@ -283,6 +288,7 @@ func startPortMasterInstall() error {
 			logWarn("portmaster", "install failed: %v", err)
 			installBarFail(firstLine(err.Error()))
 			ShowToast("Could not install PortMaster — "+firstLine(err.Error()), ToastKindError)
+			portMasterTell(then, err)
 			return
 		}
 		invalidatePortsCache()
@@ -296,22 +302,35 @@ func startPortMasterInstall() error {
 		// the first port does not wait; Python only when PortMaster's own menu
 		// is opened (portmaster_runtime.go).
 		tbxPost(pmRuntimePrefetch)
+		portMasterTell(then, nil)
 	}()
 	return nil
+}
+
+// portMasterTell hands an install's or repair's end to the port launch waiting
+// for it, on the main thread.
+func portMasterTell(then func(error), err error) {
+	if then != nil {
+		tbxPost(func() { then(err) })
+	}
 }
 
 // startPortMasterRepair downloads the official TrimUI package again and writes
 // its files over the installed PortMaster, which mends a damaged or
 // half-updated install. Ports, the runtimes in libs/, themes and settings
 // are not in the package and stay as they are.
-func startPortMasterRepair() error {
+func startPortMasterRepair() error { return startPortMasterRepairThen(nil) }
+
+// startPortMasterRepairThen is startPortMasterRepair that tells then, on the
+// main thread, how it ended (portMasterGate).
+func startPortMasterRepairThen(then func(error)) error {
 	if IsWindows() {
 		return fmt.Errorf("PortMaster runs on the handheld, not on Windows")
 	}
 	target := filepath.Join(portMasterSDRoot, "Apps", "PortMaster")
 	if !dirExists(target) {
 		if portMasterLauncher(portMasterSDRoot) == "" {
-			return startPortMasterInstall()
+			return startPortMasterInstallThen(then)
 		}
 		return fmt.Errorf("this PortMaster is not the TrimUI app in Apps/PortMaster; update it from its own menu")
 	}
@@ -335,6 +354,7 @@ func startPortMasterRepair() error {
 			logWarn("portmaster", "repair failed: %v", err)
 			installBarFail(firstLine(err.Error()))
 			tbxPost(func() { ShowToast("Could not repair PortMaster — "+firstLine(err.Error()), ToastKindError) })
+			portMasterTell(then, err)
 			return
 		}
 		installBarDone()
@@ -347,6 +367,7 @@ func startPortMasterRepair() error {
 			pmRuntimeForget()
 			pmRuntimePrefetch()
 		})
+		portMasterTell(then, nil)
 	}()
 	return nil
 }
@@ -682,6 +703,83 @@ func portsPanelActivate() {
 	portsPanelLaunchInstalled(e)
 }
 
+// portMasterLaunchNeed says what a port's start must do to PortMaster's files
+// before its script can load them. Both false: a folder with control.txt is on
+// the card and the port can go ahead.
+func portMasterLaunchNeed() (install, repair bool) {
+	_, err := os.Lstat(pmAutoTarget())
+	return portMasterLaunchNeedOf(portRealControlFolder(), err == nil, portMasterLauncher(portMasterSDRoot))
+}
+
+// portMasterLaunchNeedOf decides from what was found on the card: the folder
+// control.txt is in (portRealControlFolder), whether the TrimUI app's folder is
+// there (pmAutoTarget), and the launcher (portMasterLauncher). install: nothing
+// on the card for a script to load. repair: the TrimUI app is there but its
+// control.txt is not, which writing the package's files over it mends. A
+// PortMaster outside Apps/PortMaster belongs to another firmware and updates
+// from its own menu.
+func portMasterLaunchNeedOf(control string, appExists bool, launcher string) (install, repair bool) {
+	if control != "" {
+		return false, false
+	}
+	if appExists {
+		return false, true
+	}
+	if launcher != "" {
+		return false, false
+	}
+	return true, false
+}
+
+// portMasterGate runs on the main thread before a port whose script loads
+// PortMaster's files starts: a card with no PortMaster installs it first, and
+// the TrimUI app without its control.txt is repaired, so the port runs instead
+// of dying while it sources a control.txt that is not there. The launch carries
+// on by itself when the download ends (errPortPreparing), and the report that
+// said "open PortMaster once" for a card JukaHub could have prepared is gone.
+// Main thread.
+func portMasterGate(name, path string) error {
+	install, repair := portMasterLaunchNeed()
+	if !install && !repair {
+		return nil
+	}
+	if !pmAutoSupported() {
+		return nil // not a handheld JukaHub installs PortMaster on
+	}
+	if portMasterInstalling() || installBarActive() {
+		ShowToast("Setting up PortMaster's files — start "+name+" again in a moment", ToastKindInfo)
+		return errPortPreparing
+	}
+	if !IsOnline() {
+		return fmt.Errorf("%s needs PortMaster's files before it can run: connect to Wi-Fi and start it again, and JukaHub installs them (%s)",
+			name, portMasterInstallSize)
+	}
+	then := func(err error) {
+		if err != nil {
+			return // the install's own card and toast said why
+		}
+		if install, repair := portMasterLaunchNeed(); install || repair {
+			ShowToast("PortMaster's files are still missing — press Y on the PortMaster row, then Repair PortMaster", ToastKindWarning)
+			return
+		}
+		ShowToast("PortMaster's files are ready", ToastKindSuccess)
+		launchPortScript(name, path)
+	}
+	what := "installing PortMaster's files (" + portMasterInstallSize + ")"
+	var err error
+	if repair {
+		what = "repairing PortMaster's files"
+		err = startPortMasterRepairThen(then)
+	} else {
+		err = startPortMasterInstallThen(then)
+	}
+	if err != nil {
+		return fmt.Errorf("%s needs PortMaster's files: %w", name, err)
+	}
+	ShowToast("Before "+name+" starts: "+what, ToastKindInfo)
+	return errPortPreparing
+}
+
 // launchPortScript starts a port, or PortMaster itself (name ==
 // portMasterAppName), and says so. Main thread.
 func launchPortScript(name, path string) {
@@ -723,6 +821,12 @@ func startPortScript(name, path string) error {
 	if !master {
 		game = portLibraryGame(path)
 		if err := playtimeAllowGameLaunch(game.Title); err != nil {
+			return err
+		}
+		// A port's script sources PortMaster's control.txt before it does
+		// anything else: install PortMaster when the card has none, repair
+		// the TrimUI app when its control.txt is gone, then carry on.
+		if err := portMasterGate(name, path); err != nil {
 			return err
 		}
 	}

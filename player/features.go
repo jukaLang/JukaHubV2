@@ -788,7 +788,8 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		glyph := "@media"
 		if isFileExplorer {
 			glyph = "@files"
-			title, body = "This folder is empty", hintSentence("Press %s to go back up.", "B", "Back")
+			title = "This folder is empty"
+			body = hintSentence2("Press %s to go back up, or %s for Actions (New folder).", "B", "Back", "Y", "Actions")
 			if filesNav.listErr != nil {
 				title, body = filesListErrorText(filesNav.listErr)
 			}

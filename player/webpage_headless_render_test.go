@@ -34,8 +34,7 @@ import (
 const (
 	headlessBrowserWidth  = 1000
 	headlessBrowserHeight = 1600
-	// A tiny valid GIF. Fixture images use data URIs so the headless pass never
-	// needs the network, while still exercising the image fetch/decode path.
+	// A tiny valid GIF. Fixture images use data URIs so the hath.
 	headlessPixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
 	// The PNGs are deliberately colourful: pixel assertions can tell them
 	// apart from the page paper, a missing image placeholder and a gradient.
@@ -1008,5 +1007,133 @@ func TestBrowserHeadlessFixtureInventory(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBrowserHeadlessWrapperBottomInsetClearsFollowingBlock(t *testing.T) {
+	// A contents box (Wikipedia's .toc) is a wrapper with its own bottom
+	// padding and no text block of its own. Its painted surface reached the
+	// padding, but the flow after its last child ignored it, so the next
+	// heading was drawn inside the grey bottom padding.
+	h := newHeadlessBrowser(t)
+	html := `<!doctype html><html><body style="margin:0">
+		<div style="background:#f8f9fa;padding:0 16px 16px 16px;margin:0 0 16px 0;">
+			<p style="margin:0">First entry</p>
+			<p style="margin:0">Last entry</p>
+		</div>
+		<h2 style="margin:0">After the box</h2>
+	</body></html>`
+	_, layout := h.load("wrapper-bottom-inset", html)
+	var box sdl.Rect
+	for _, r := range layout.Rects {
+		if r.BackgroundFill && r.Color == (sdl.Color{R: 0xf8, G: 0xf9, B: 0xfa, A: 255}) {
+			box = r.Rect
+		}
+	}
+	if box.W <= 0 || box.H <= 0 {
+		t.Fatalf("wrapper painted no grey box: rects=%+v", layout.Rects)
+	}
+	afterY := int32(-1)
+	for _, row := range layout.Rows {
+		var line string
+		for _, run := range row.Runs {
+			line += run.Text
+		}
+		if strings.Contains(line, "After") {
+			afterY = row.Y
+		}
+	}
+	if afterY < 0 {
+		t.Fatalf("heading run missing from the layout")
+	}
+	if afterY < box.Y+box.H {
+		t.Fatalf("heading at y=%d overlaps the wrapper ending at y=%d: box=%+v",
+			afterY, box.Y+box.H, box)
+	}
+}
+
+func TestBrowserHeadlessAbsoluteImageLeavesTheFlow(t *testing.T) {
+	// Wikipedia's portal places its globe with `position:absolute; top:158px;
+	// left:35px` inside the wordmark block. The picture's block used to keep
+	// the surrounding paragraph's layout: the picture flowed as an ordinary
+	// image and pushed every line below it down by its height, and it lost the
+	// wrapper its insets are measured from. Both halves are one change —
+	// addImageElement takes the picture's own positioning (webpage_inline.go)
+	// and layoutLayer keeps the wrapper box that block owns as its containing
+	// block (webpage_layers.go).
+	h := newHeadlessBrowser(t)
+	html := `<!doctype html><html><body style="margin:0">
+		<p style="margin:0">First line</p>
+		<div style="position:relative;margin-top:200px">Wordmark
+			<img src="` + headlessPixel + `" style="position:absolute;top:8px;left:0;width:40px;height:320px">
+		</div>
+		<p style="margin:0">After the picture</p>
+	</body></html>`
+	_, layout := h.load("absolute-image", html)
+	rowY := func(text string) int32 {
+		for _, row := range layout.Rows {
+			var line string
+			for _, run := range row.Runs {
+				line += run.Text + " "
+			}
+			if strings.Contains(line, text) {
+				return row.Y
+			}
+		}
+		t.Fatalf("%q is missing from the layout", text)
+		return -1
+	}
+	var picture sdl.Rect
+	for _, f := range layout.Floats {
+		if len(f.Images) > 0 {
+			picture = sdl.Rect{X: f.X, Y: f.Y, W: f.W, H: f.H}
+		}
+	}
+	if picture.W <= 0 || picture.H <= 0 {
+		t.Fatalf("the positioned picture drew no layer: floats=%+v", layout.Floats)
+	}
+	wrapper := rowY("Wordmark")
+	if picture.Y < wrapper-40 || picture.Y > wrapper+80 {
+		t.Fatalf("the picture placed at y=%d instead of its wrapper's top:8px at y=%d", picture.Y, wrapper)
+	}
+	if after := rowY("After the picture"); after >= picture.Y+picture.H {
+		t.Fatalf("the following line at y=%d was pushed below the layer ending at y=%d", after, picture.Y+picture.H)
+	}
+}
+
+func TestBrowserHeadlessWrapperHeadingKeepsItsShelfGap(t *testing.T) {
+	// The language shelves on wikipedia.org label each list with an h2 that
+	// is 1px tall and holds only a block-level span (`.bookshelf-container`),
+	// its label pulled up onto the rule with position:relative. The wrapper
+	// owned no block of its own, so its 2.4rem top margin was dropped and the
+	// label was painted over the previous list's last line.
+	h := newHeadlessBrowser(t)
+	html := `<!doctype html><html><body style="margin:0">
+		<p style="margin:0">Previous list</p>
+		<h2 style="margin:38px 0 16px;height:1px">
+			<span style="display:block;position:relative;top:-18px">Shelf label</span>
+		</h2>
+		<div><p style="margin:0">Next list</p></div>
+	</body></html>`
+	_, layout := h.load("shelf-heading-gap", html)
+	rowY := func(text string) int32 {
+		for _, row := range layout.Rows {
+			var line string
+			for _, run := range row.Runs {
+				line += run.Text + " "
+			}
+			if strings.Contains(line, text) {
+				return row.Y
+			}
+		}
+		t.Fatalf("%q is missing from the layout", text)
+		return -1
+	}
+	prev, label, next := rowY("Previous list"), rowY("Shelf label"), rowY("Next list")
+	if label-prev < 72 {
+		t.Fatalf("the shelf heading's margin was dropped: previous line at %d, label at %d", prev, label)
+	}
+	if next <= label {
+		t.Fatalf("the next list starts at %d, on or above the shelf label at %d", next, label)
 	}
 }

@@ -25,6 +25,15 @@ package main
 //     load on this firmware even with JukaHub's glibc, or it is over the
 //     download limit. The buildbot's next build gets its own check, and the
 //     tile comes back with it;
+//   - since 2026-11-26 (Juka, "If there are higher performance cores available
+//     on TrimuiSmartPro, let's remove slow or unneeded cores like for N64 or
+//     old version of PPSSPP"), a faster emulator for the same console plays its
+//     games on this chip (coreTrimuiSlower, corePPSSPPSetUpHere): ParaLLEl N64
+//     and the old Mupen64Plus core beside Mupen64Plus-Next, and RetroArch's
+//     PPSSPP core beside the PPSSPP JukaHub installs here, which is newer. The
+//     list offered a build that could only be the slower of two. An installed
+//     core of theirs is still listed and updated (below), and the PSP tile's
+//     PPSSPP card still installs RetroArch's core when you press there;
 //   - since 2026-11-26 ("make sure all emulators listed can run on Trimui
 //     Smart pro"), it draws with the GPU and nothing shows its build is made
 //     for OpenGL ES, the only kind these firmwares' RetroArch has
@@ -57,6 +66,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // coreTrimuiNever lists the cores no TrimUI handheld runs, with the reason the
@@ -85,6 +95,50 @@ var coreTrimuiNever = map[string]string{
 
 // coreTrimuiPS2Others are the PlayStation 2 cores other than ARMSX2.
 var coreTrimuiPS2Others = map[string]bool{"play": true, "pcsx2": true, "lrps2": true}
+
+// coreTrimuiSlower lists the cores a faster emulator for the same console
+// covers on this chip, with what plays its games instead (by
+// normalizeCoreName). The buildbot still builds them, but nothing on a TrimUI
+// handheld gains from one: each is the slow half of a pair whose other half the
+// card already plays with, and listing it offered a build that would run slower
+// than what is there.
+var coreTrimuiSlower = map[string]string{
+	"parallel_n64": "N64 plays faster in Mupen64Plus-Next here: ParaLLEl N64 draws the N64's graphics chip in software",
+	"mupen64plus":  "N64 plays faster in Mupen64Plus-Next here: this core is the one it replaced",
+}
+
+// coreTrimuiSuperseded says why this handheld does not offer core, because a
+// faster emulator plays its console here; "" when none does. handheld is this
+// device (a PC keeps every core the buildbot publishes), ppssppReady that
+// JukaHub installs its own PPSSPP for this model (corePPSSPPSetUpHere). Cheap
+// and safe off the main thread.
+func coreTrimuiSuperseded(core string, handheld, ppssppReady bool) string {
+	if !handheld {
+		return ""
+	}
+	core = normalizeCoreName(core)
+	if why := coreTrimuiSlower[core]; why != "" {
+		return why
+	}
+	if core == "ppsspp" && ppssppReady {
+		return "PSP games play in the PPSSPP JukaHub installs for this chip (Emulators → PSP), a newer PPSSPP than this core's"
+	}
+	return ""
+}
+
+// corePPSSPPSetUpHere reports that JukaHub has a PPSSPP of its own for this
+// model (ppsspp_managed.go), the newer build PSP games play in: RetroArch's
+// PPSSPP core is then the older of two. Read once (the model does not change
+// while JukaHub runs), since a published-core list asks per core.
+func corePPSSPPSetUpHere() bool { return corePPSSPPReady() }
+
+var corePPSSPPReady = sync.OnceValue(func() bool {
+	if !ppssppManagedEnabled() {
+		return false
+	}
+	platform, _ := ppssppPlatform()
+	return platform != ""
+})
 
 // coreTrimuiMisfit says why core cannot work on this TrimUI handheld, "" when
 // it may. crc is the CRC32 of the build the buildbot lists now ("" skips the
@@ -123,6 +177,11 @@ func coreTrimuiMisfit(core, crc string) string {
 				return sys.Reason
 			}
 		}
+	}
+	// A console whose faster emulator JukaHub already plays with
+	// (coreTrimuiSlower, corePPSSPPSetUpHere).
+	if why := coreTrimuiSuperseded(core, IsTrimuiDevice(), corePPSSPPSetUpHere()); why != "" {
+		return why
 	}
 	// A GPU-rendered core whose published build is made for desktop OpenGL,
 	// which no TrimUI firmware's RetroArch draws with (coregpuoffer.go).

@@ -379,6 +379,9 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 		{"ALC: could not create context", ""},
 		{"sh: setterm: not found", ""},
 		{"data/level1.pak: not found", ""},
+		// PortMaster's own device probe asks for the CPU name; no port needs
+		// it (JH-AGE2UH was told only this).
+		{"/mnt/SDCARD/Apps/PortMaster/PortMaster/device_info.txt: line 268: lscpu: command not found", ""},
 		{"line 3: syntax error near unexpected token `('", ""},
 		// PortMaster's TrimUI control.txt was found: its own lines failed
 		// (JH-AT4EEE blamed PortMaster for these).
@@ -387,6 +390,17 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 		{"/tmp/jukahub-greenovercast-1.sh: line 18: /roms/ports/PortMaster/control.txt: No such file or directory", "The script did not find PortMaster"},
 		{"/roms/ports/PortMaster/control.txt: line 30: /roms/ports/PortMaster/funcs.txt: No such file or directory", "PortMaster is missing some of its own files"},
 		{"Credential store could not be read", "Its saved sign-in could not be read"},
+		// JH-7RKB39 (Billy Frontier): PortMaster's own cleanup stops its key
+		// mapper as the port ends, so that "Killed" line is not the system
+		// stopping the game (which segfaulted).
+		{"/mnt/SDCARD/Apps/PortMaster/PortMaster/funcs.txt: line 140:  4478 Killed                  $GPTOKEYB \"BillyFrontier.aarch64\" -c \"./billyfrontier.gptk\"", ""},
+		{"line 140:  4478 Killed                  /mnt/SDCARD/Apps/PortMaster/PortMaster/gptokeyb game.aarch64", ""},
+		// A script that runs with set -u and reads a variable nothing gave it
+		// (JH-ZBPUTA: a port gone after 700 ms with "line 5: $1: unbound
+		// variable", and a card that said JukaHub found nothing).
+		{script + ": line 5: $1: unbound variable", "A script stopped on a variable that was not set"},
+		{"Data/ports/hakux-disc/launch.sh: 5: $1: parameter not set", "A script stopped on a variable that was not set"},
+		{"/roms/ports/PortMaster/control.txt: line 30: XDG_DATA_HOME: unbound variable", "A script stopped on a variable that was not set"},
 	} {
 		if got := titles(c.line); got != c.want {
 			t.Errorf("%q: got %q, want %q", c.line, got, c.want)
@@ -401,6 +415,163 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 	good := []string{"bash: JukaHub's (Ubuntu's bash on the private glibc 2.39) — /bin/bash cannot run bash arrays"}
 	if issues, _, _ := gameDiagPortLogFindings(good, []string{`/x/device_info.txt: line 12: syntax error: unexpected "("`}, script); len(issues) != 0 {
 		t.Errorf("BusyBox blamed under a working bash: %+v", issues)
+	}
+}
+
+// A port's environment carries no shell option set from JukaHub: a bash started
+// from another bash inherits nounset and errexit through SHELLOPTS, and one
+// that is handed BASH_ENV or ENV runs that file first (JH-ZBPUTA).
+func TestPortEnvDropsShellOptions(t *testing.T) {
+	env := portEnvDropShellVars([]string{
+		"HOME=/",
+		"SHELLOPTS=nounset:pipefail",
+		"BASHOPTS=extglob",
+		"BASH_ENV=/tmp/first.sh",
+		"ENV=/tmp/also-first.sh",
+		"PATH=/usr/bin:/bin",
+	})
+	if got, want := strings.Join(env, "|"), "HOME=/|PATH=/usr/bin:/bin"; got != want {
+		t.Fatalf("port environment = %q, want %q", got, want)
+	}
+	// A variable that only looks like one stays.
+	if got := portEnvDropShellVars([]string{"SHELLOPTS_X=1", "ENVS=2"}); strings.Join(got, "|") != "SHELLOPTS_X=1|ENVS=2" {
+		t.Fatalf("near-miss names dropped: %q", got)
+	}
+}
+
+// Half-Life's own check for its game data (JH-AGE2UH): the script prints
+// "Missing game files" on the screen, which no log JukaHub reads holds, and
+// exits, so the file it names is read from the script itself.
+func TestPortScriptGameDataCheck(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "Half-Life.sh")
+	body := `#!/bin/bash
+# PORTMASTER: half-life.zip, Half-Life.sh
+GAMEDIR="` + dir + `"
+if [[ -f "${GAMEDIR}/binaries/valve_first_run" ]]; then
+  if [[ ! -f "${GAMEDIR}/valve/halflife.wad" ]]; then
+    echo "Missing game files, see README for more info." > /dev/tty0
+    sleep 5
+    $ESUDO systemctl restart oga_events &
+    exit 1
+  fi
+fi
+# A folder it makes when it is not there is no stop.
+if [ ! -d "${GAMEDIR}/save" ]; then
+  mkdir -p "${GAMEDIR}/save"
+fi
+# A note and no exit: no stop either.
+if [ ! -f "${GAMEDIR}/port.json" ]; then
+  echo "port.json is missing"
+fi
+`
+	if err := os.WriteFile(script, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := gameDiagPortNeededFile(script, dir); got != "valve/halflife.wad" {
+		t.Fatalf("missing data check: %q, want valve/halflife.wad", got)
+	}
+	// With the game's file there the port goes on.
+	if err := os.MkdirAll(filepath.Join(dir, "valve"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "valve", "halflife.wad"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := gameDiagPortNeededFile(script, dir); got != "" {
+		t.Fatalf("data present, still reported: %q", got)
+	}
+	// Half-Life builds GAMEDIR from PORTDIR: the folder is found, and the
+	// check inside it read, once that is filled in.
+	card := t.TempDir()
+	indirect := `#!/bin/bash
+PORTDIR="/$directory/ports/"
+GAMEDIR="${PORTDIR}/Half-Life"
+cd $GAMEDIR
+if [[ ! -f "${GAMEDIR}/valve/halflife.wad" ]]; then
+  echo "Missing game files, see README for more info." > $CUR_TTY
+  sleep 5
+  exit 1
+fi
+`
+	if err := os.WriteFile(filepath.Join(card, "Half-Life.sh"), []byte(indirect), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	portDir := filepath.Join(card, "Half-Life")
+	if err := os.MkdirAll(portDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if dir, found := gameDiagPortDir(filepath.Join(card, "Half-Life.sh")); dir != portDir || found != "Half-Life" {
+		t.Fatalf("GAMEDIR built from PORTDIR: folder %q rel %q, want %q", dir, found, portDir)
+	}
+	if got := gameDiagPortNeededFile(filepath.Join(card, "Half-Life.sh"), portDir); got != "valve/halflife.wad" {
+		t.Fatalf("GAMEDIR built from PORTDIR: missing data %q", got)
+	}
+	// A script that checks something outside its folder says nothing about
+	// the port's data.
+	outside := filepath.Join(dir, "Other.sh")
+	if err := os.WriteFile(outside, []byte("if [ ! -f /roms/bios/scph1001.bin ]; then\n  echo \"Missing BIOS\"\n  exit 1\nfi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := gameDiagPortNeededFile(outside, dir); got != "" {
+		t.Fatalf("outside-file check reported: %q", got)
+	}
+}
+
+// Where a port's game files go: its gamedata folder when it has one, else the
+// port's own folder, and the path written as the card shows it in a PC.
+func TestPortGameDataFolder(t *testing.T) {
+	old := portMasterSDRoot
+	portMasterSDRoot = t.TempDir()
+	defer func() { portMasterSDRoot = old }()
+
+	dir := filepath.Join(portMasterSDRoot, "Data", "ports", "Half-Life")
+	if err := os.MkdirAll(filepath.Join(dir, "binaries"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if folder, sub := portGameDataFolder(dir); folder != dir || sub != "" {
+		t.Fatalf("no gamedata: got %q %q, want the port's own folder", folder, sub)
+	}
+	data := filepath.Join(dir, "gamedata")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if folder, sub := portGameDataFolder(dir); folder != data || sub != "gamedata" {
+		t.Fatalf("gamedata: got %q %q, want %q", folder, sub, data)
+	}
+	if got := gameDiagPortCardPath(data); got != "Data/ports/Half-Life/gamedata" {
+		t.Fatalf("card path: %q, want Data/ports/Half-Life/gamedata", got)
+	}
+	// The card's detail names the folder on the card and the file the script
+	// stops without, so a copy is made in the right place, one folder deep.
+	detail := gameDiagPortDataDetail(dir, "valve/halflife.wad")
+	for _, want := range []string{"Data/ports/Half-Life", "valve/halflife.wad", "copy the folder it comes in (valve)"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail %q does not name %q", detail, want)
+		}
+	}
+}
+
+// A port's start prepares PortMaster's files itself: a card with none installs
+// them, and the TrimUI app without its control.txt is repaired (JH-7RKB39's
+// card told the player to open PortMaster for a card JukaHub can set up).
+func TestPortMasterLaunchNeed(t *testing.T) {
+	for _, c := range []struct {
+		control, launcher string
+		app               bool
+		install, repair   bool
+	}{
+		{"/mnt/SDCARD/Apps/PortMaster/PortMaster", "/mnt/SDCARD/Apps/PortMaster/launch.sh", true, false, false},
+		{"/roms/ports/PortMaster", "", false, false, false},
+		{"", "/mnt/SDCARD/Apps/PortMaster/launch.sh", true, false, true},
+		{"", "", false, true, false},
+		{"", "/mnt/SDCARD/Ports/PortMaster.sh", false, false, false},
+	} {
+		install, repair := portMasterLaunchNeedOf(c.control, c.app, c.launcher)
+		if install != c.install || repair != c.repair {
+			t.Errorf("control=%q app=%v launcher=%q: got install=%v repair=%v, want %v %v",
+				c.control, c.app, c.launcher, install, repair, c.install, c.repair)
+		}
 	}
 }
 

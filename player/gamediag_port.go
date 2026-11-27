@@ -31,18 +31,29 @@ package main
 //     sources TRIMUI_EX's ex_config and starts sdl2imgshow, which a card
 //     without TRIMUI_EX lacks, and bash goes on past both (a Smart Pro S
 //     report, JH-AT4EEE, blamed PortMaster for that);
+//   - a script stopped by a variable nothing had set: with `set -u`
+//     (nounset) bash ends the script at its first `$1` and says "$1: unbound
+//     variable", and a port is started with no arguments — a Smart Pro
+//     report, JH-ZBPUTA, was told only that JukaHub found nothing it could
+//     check;
+//   - the game's own data the script checks for itself and does not find
+//     (gameDiagPortNeededFile: Half-Life prints "Missing game files" on the
+//     screen, which no log holds, and exits — a Smart Pro report, JH-AGE2UH,
+//     was told only that the firmware lacks lscpu);
 //   - the program saying it could not read the sign-in it saved
 //     (GreenOvercast, which then closes: greenovercast_store.go);
 //   - a program built for a newer glibc or libstdc++, a library the handheld
 //     lacks, or a program built for another processor (or missing);
 //   - JukaHub's own bash (Ubuntu's, on the private C runtime) not starting;
 //   - the graphics (EGL, OpenGL ES, SDL video) failing to start;
-//   - a crash, the system stopping it for memory, a runtime (.squashfs) that
-//     is missing or did not mount, a file it may not run;
+//   - a crash, the system stopping it for memory (not PortMaster's own key
+//     mapper, which pm_finish stops as the port ends), a runtime (.squashfs)
+//     that is missing or did not mount, a file it may not run;
 //   - commands the script ran that are not on this firmware (a "maybe": some
 //     are harmless).
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -79,10 +90,22 @@ var (
 	// gameDiagPortKilledRe is the shell's report of a program the system
 	// killed ("line 40:  1234 Killed  ./game").
 	gameDiagPortKilledRe = regexp.MustCompile(`(?:^|\s)Killed(?:\s|$)`)
+	// gameDiagPortKilledKeyMapperRe is that report about PortMaster's own key
+	// mapper, which its pm_finish stops as the port ends (the shell prints the
+	// command as written: "$GPTOKEYB \"game.aarch64\" -c ./game.gptk"). A
+	// port that crashed still cleans up, so that line says nothing about why
+	// the game stopped (JH-7RKB39: a segfault, and the card chose memory).
+	gameDiagPortKilledKeyMapperRe = regexp.MustCompile(`(?i)\bKilled\b.*gptokeyb\b`)
 	// gameDiagPortNoProgRe is bash failing to start a program the script runs
 	// from its folder ("line 38: ./game: No such file or directory"): the
 	// file, or its loader (a 32-bit one), is not there.
 	gameDiagPortNoProgRe = regexp.MustCompile(`line \d+: (\./[^\s:]+): No such file or directory`)
+	// gameDiagPortUnsetRe is a shell's own report of a variable nothing had
+	// set: bash's `script: line 5: $1: unbound variable` (the script runs
+	// with `set -u`) and BusyBox's or dash's `script: 5: $1: parameter not
+	// set`. Bash names a positional parameter with its `$` ($1) and any other
+	// variable without one (XDG_DATA_HOME); the group is the name it used.
+	gameDiagPortUnsetRe = regexp.MustCompile(`(?:^|[\s:])(\$[0-9@*#?$!-]+|\$?[A-Za-z_][A-Za-z0-9_]*): (?:unbound variable|parameter not set)`)
 	// gameDiagPortMissingObjRe is a file's line that could not open
 	// something: "control.txt: line 9: /x/ex_config: No such file or
 	// directory" (the file, then the thing its line wanted).
@@ -119,7 +142,10 @@ var (
 	// setterm on every start; PortMaster's TrimUI control.txt shows its
 	// splash with TRIMUI_EX's sdl2imgshow).
 	gameDiagPortHarmlessCmds = map[string]bool{"setterm": true, "systemctl": true, "sudo": true, "dbus-send": true,
-		"nmcli": true, "udevadm": true, "fbset": true, "loadkeys": true, "sdl2imgshow": true}
+		"nmcli": true, "udevadm": true, "fbset": true, "loadkeys": true, "sdl2imgshow": true,
+		// PortMaster's own device probe (device_info.txt) asks lscpu for the
+		// CPU name; no port needs it.
+		"lscpu": true}
 	// gameDiagPortControlMissWords say a file could not be opened.
 	gameDiagPortControlMissWords = []string{"no such file", "not found", "can't open", "cannot open"}
 	// gameDiagPortStoreWords say a saved sign-in could not be used.
@@ -241,6 +267,7 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 	}
 	// The first line of each cause, and what the lines name.
 	var sh, control, pmBroken, store, glibc, lib, execLine, ownBash, gfx, crash, mem, rt, perm, cmd string
+	var unset, unsetVar string
 	var shFile, glibcBy string
 	var glibcNeeds, libs, progs, cmds []string
 	addOnce := func(list []string, s string) []string {
@@ -278,6 +305,10 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 			if pmBroken == "" {
 				pmBroken = line
 			}
+		case gameDiagPortUnsetRe.MatchString(line):
+			if unset == "" {
+				unset, unsetVar = line, gameDiagPortUnsetRe.FindStringSubmatch(line)[1]
+			}
 		case strings.Contains(lower, "credential store") && gameDiagHasAny(lower, gameDiagPortStoreWords):
 			if store == "" {
 				store = line
@@ -313,7 +344,9 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 				crash = line
 			}
 		case gameDiagHasAny(lower, gameDiagPortMemWords) || gameDiagPortKilledRe.MatchString(line):
-			if mem == "" {
+			// PortMaster's key mapper stopped by its own pm_finish is no
+			// cause: the game was already over.
+			if mem == "" && !gameDiagPortKilledKeyMapperRe.MatchString(line) {
 				mem = line
 			}
 		case strings.Contains(lower, "squashfs") && gameDiagHasAny(lower, gameDiagPortFailWords),
@@ -395,6 +428,9 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 		add(gameDiagSure, "PortMaster is missing some of its own files",
 			"The script found PortMaster's control.txt, but a file it loads from PortMaster's folder is not there. Press Y on the PortMaster row of the Ports panel → Repair PortMaster.", pmBroken, nil)
 	}
+	if unset != "" {
+		add(gameDiagSure, "A script stopped on a variable that was not set", gameDiagPortUnsetDetail(unsetVar, unset), unset, nil)
+	}
 	if store != "" {
 		// The folder this launch kept the sign-in in, from its notes
 		// (greenovercast_store.go).
@@ -472,6 +508,92 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 		}
 	}
 	return issues, evidence, fromOutput
+}
+
+// gameDiagPortGuardRe is a port script's own check that a file of the game's
+// is there: `if [[ ! -f "${GAMEDIR}/valve/halflife.wad" ]]; then`.
+var gameDiagPortGuardRe = regexp.MustCompile(`^\s*if\s+(?:\[\[|\[)\s*!\s+-([fde])\s+(\S+?)\s*(?:\]\]|\])\s*(?:;.*)?$`)
+
+// gameDiagPortGameDataWords say what a script prints when such a check fails
+// and the message is about the game's own files.
+var gameDiagPortGameDataWords = []string{"missing", "not found", "no such", "copy", "need", "required",
+	"install", "download", "extract", "files"}
+
+// gameDiagPortNeededFile reads a port's script for a check it makes itself and
+// stops on: an `if [[ ! -f "$GAMEDIR/valve/halflife.wad" ]]` block that prints
+// a message about the game's files and exits. Half-Life checks its data that
+// way, prints "Missing game files, see README for more info." on the screen
+// (which JukaHub's log never sees), sleeps five seconds and exits 1 — a Smart
+// Pro report (JH-AGE2UH) was told only that the firmware lacks lscpu. It
+// returns the missing file's path inside the port's folder, or "".
+func gameDiagPortNeededFile(script, dir string) string {
+	if dir == "" {
+		return ""
+	}
+	head, err := gameDiagReadHead(script)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(string(head), "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		m := gameDiagPortGuardRe.FindStringSubmatch(line)
+		if m == nil || !gameDiagPortGuardStops(lines[i+1:]) {
+			continue
+		}
+		kind := m[1]
+		target := strings.Trim(strings.TrimSpace(m[2]), `"'`)
+		trimmed := strings.TrimPrefix(strings.TrimPrefix(target, "${GAMEDIR}"), "$GAMEDIR")
+		if trimmed == target || !strings.HasPrefix(trimmed, "/") {
+			continue // not the port's own folder: another program's file
+		}
+		path := dir + trimmed
+		if kind == "d" {
+			if dirExists(path) {
+				continue
+			}
+		} else if _, err := os.Stat(path); err == nil {
+			continue
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		return filepath.ToSlash(rel)
+	}
+	return ""
+}
+
+// gameDiagPortGuardStops reports whether an if block's own body prints a
+// message about the game's files and exits. A block that only makes a folder
+// or prints a note goes on and is no check for the game's data; neither is an
+// exit in the block's else branch.
+func gameDiagPortGuardStops(body []string) bool {
+	depth := 1
+	message, exited := false, false
+	for _, raw := range body {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		switch {
+		case line == "fi" || strings.HasPrefix(line, "fi;") || strings.HasPrefix(line, "fi ") || strings.HasPrefix(line, "fi\t"):
+			depth--
+			if depth == 0 {
+				return message && exited
+			}
+		case depth == 1 && (line == "else" || strings.HasPrefix(line, "else ") || strings.HasPrefix(line, "elif ")):
+			return false
+		case line == "if" || strings.HasPrefix(line, "if ") || strings.HasPrefix(line, "if\t") || strings.HasPrefix(line, "if("):
+			depth++
+		case depth == 1 && (strings.HasPrefix(line, "echo ") || strings.HasPrefix(line, "printf ")):
+			if gameDiagHasAny(strings.ToLower(line), gameDiagPortGameDataWords) {
+				message = true
+			}
+		case depth == 1 && (line == "exit" || strings.HasPrefix(line, "exit ") || strings.HasPrefix(line, "exit;")):
+			exited = true
+		}
+	}
+	return false
 }
 
 // gameDiagPortControlLine sorts a line that names control.txt. missing: the
@@ -555,6 +677,31 @@ func gameDiagPortShDetail(file, script string) string {
 		return filepath.Base(file) + " was started by its own #!/bin/bash line, which on this firmware is BusyBox's sh. JukaHub gives each launch a real /bin/bash of its own when it can; this time it could not (the launch log's notes say why: portBinBash off, no mount namespace, or a failed bind). Send the log below with a bug report."
 	}
 	return "PortMaster's scripts need a full bash, but this one ran under BusyBox's sh (the firmware's /bin/bash). If portLaunchVia is set to \"firmware\", set it back to \"auto\"; otherwise send the log below with a bug report."
+}
+
+// gameDiagPortUnsetDetail says what a script that stopped on a variable
+// nothing had set needs: variable as the shell named it, line the shell's own
+// report. A port's script with `set -u` ends at its first `$1`, which no
+// launcher gives it (JH-ZBPUTA), and a variable PortMaster's control.txt fills
+// is empty when the script never found that file.
+func gameDiagPortUnsetDetail(variable, line string) string {
+	name := strings.TrimPrefix(variable, "$")
+	file := filepath.Base(gameDiagPortLineFile(line))
+	who := "The script"
+	if file != "" && !strings.EqualFold(file, "control.txt") {
+		who = file
+	}
+	detail := who + " stopped on " + variable + ": it runs with `set -u` (nounset), which ends the script at the first variable nothing has given it. "
+	switch name {
+	case "1", "2", "3", "@", "*":
+		detail += "A port is started the way the firmware's Ports tab starts it — with no arguments — so a script that reads its game, disc or folder as \"$1\" gets none. "
+	default:
+		detail += "A variable PortMaster's control.txt sets stays empty when the script never found that file. "
+	}
+	if name == "1" {
+		return detail + "If the port is meant to be started with a game, start it from there; otherwise its script has to fill the gap (\"${1:-}\")."
+	}
+	return detail + "The port's own script has to fill the gap (\"${" + name + ":-}\") before it runs with `set -u`."
 }
 
 // gameDiagPortExcerpt is the card's log lines: the lines behind the findings

@@ -125,7 +125,7 @@ func TestCalDAVMultistatus(t *testing.T) {
 	if p.ResourceType.Calendar == nil || p.DisplayName != "Work" || caldavColor(p.Color) != "#ff8800" {
 		t.Errorf("calendar props = %+v", p)
 	}
-	evs := caldavEventsFrom(ms, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC))
+	evs := caldavEventsFrom(ms, nil, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC))
 	if len(evs) != 1 || evs[0].Title != "Dentist" || !evs[0].Start.Equal(time.Date(2026, 11, 20, 15, 0, 0, 0, time.UTC)) {
 		t.Errorf("events = %+v", evs)
 	}

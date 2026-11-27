@@ -1927,6 +1927,12 @@ func trophyRoomAction(config *Config, act trophyAction) bool {
 		return true
 	}
 
+	if act == trophyActSort && r.tab == trophyTabStats && !r.sheet {
+		// The Stats tab has nothing to sort: X (and a pad's X) exports the
+		// playtime CSV and HTML to the card (playtime_export.go).
+		return playtimeExportToCard()
+	}
+
 	if r.sheet {
 		switch act {
 		case trophyActLeft, trophyActUp:
@@ -2200,7 +2206,7 @@ func trophyRoomFooterHints() []FooterHint {
 	}
 	if r.tab == trophyTabStats {
 		// "/ Tab": the keyboard switches the tab with Tab (trophyRoomKeyAction).
-		hints := []FooterHint{{Button: "L1/R1 / Tab", Label: "Tabs"}, {Button: "B", Label: "Back"}}
+		hints := []FooterHint{{Button: "L1/R1 / Tab", Label: "Tabs"}, {Button: "B", Label: "Back"}, {Button: "X", Label: "Export playtime"}}
 		if retroAchievementsSupported() {
 			hints = append(hints, FooterHint{Button: "Y", Label: "RetroAchievements"})
 		}

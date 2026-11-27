@@ -186,3 +186,45 @@ func TestWebPaintedBlockTakesItsTopInsetOnce(t *testing.T) {
 		t.Fatalf("a blockquote opening the page started on row %d, want 0", row)
 	}
 }
+
+// A table row numbers its cells from -1 (-(c+1) in webpage_table.go), so the
+// first cell's blocks carry FlexItem -1 and the next cell's -2. Grouping a row
+// into items has to open a group on its first block whatever number it carries:
+// DuckDuckGo Lite's results page put such a row through a flex layout, the
+// grouping read the -1 as a repeat of a group it had not opened yet, and
+// indexed the empty list. The panic took the app down mid-draw, so the search
+// results never appeared.
+func TestWebGroupFlexItemsStartsOnNegativeCellNumber(t *testing.T) {
+	visible := func(item int) webBlock {
+		return webBlock{FlexItem: item, Runs: []webRun{{Text: "x"}}}
+	}
+	items := webGroupFlexItems([]webBlock{
+		visible(-1), visible(-1), // the first cell's two blocks: one column
+		visible(-2),            // the second cell: the next column
+		visible(0), visible(0), // anonymous items keep their own columns
+	})
+	if len(items) != 4 {
+		t.Fatalf("grouped %d items, want 4 (two cells, then two anonymous blocks)", len(items))
+	}
+	if len(items[0].blocks) != 2 || len(items[1].blocks) != 1 ||
+		len(items[2].blocks) != 1 || len(items[3].blocks) != 1 {
+		t.Fatalf("cells did not group by their number: %d/%d/%d/%d blocks",
+			len(items[0].blocks), len(items[1].blocks), len(items[2].blocks), len(items[3].blocks))
+	}
+}
+
+// The same row reaching the layout through a flex container, as DuckDuckGo
+// Lite's results page does: the first cell's FlexItem is -1 and the row must
+// still draw both its columns.
+func TestWebFlexRowWithTableCellsLaysOut(t *testing.T) {
+	legibleTestInitFonts(t)
+	layout := parseWebPage(`<div style="display:flex"><table><tr><td>1.</td><td>Title</td></tr>`+
+		`<tr><td></td><td>Snippet</td></tr></table></div>`,
+		"", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	titleRow, titleX := webTestTextPosition(t, layout, "Title")
+	snippetRow, snippetX := webTestTextPosition(t, layout, "Snippet")
+	if titleRow == snippetRow || titleX != snippetX {
+		t.Fatalf("the table's rows should stack with their columns aligned: Title=(%d,%d) Snippet=(%d,%d)",
+			titleRow, titleX, snippetRow, snippetX)
+	}
+}

@@ -229,6 +229,27 @@ to it:
   `display: WestonPack started the program after …` line is the good case).
   Anything `westonwrap.sh cleanup` leaves running in the background is stopped
   before JukaHub takes the screen back.
+* **A library the image leaves to the firmware.** WestonPack's own modules
+  (`xwayland.so`, which every mode loads because westonwrap starts Weston with
+  `--xwayland`, and `headless-backend.so`, which the OpenGL mode draws through)
+  link `libjpeg.so.8` — libjpeg's 8 ABI — and the image carries only
+  `libjpeg.so.62`: libjpeg 8 is one WestonPack takes from the CFW, which
+  ROCKNIX and muOS have and a stock TrimUI firmware does not (the same gap that
+  keeps the buildbot's ARMSX2 core out of the PS2 setup). Weston stopped at the
+  first module it could not load — `Failed to load module: libjpeg.so.8`,
+  `fatal: failed to create compositor backend` in the app's log — in every
+  mode, so no Windows program started at all (JH-MSD7AY, JH-JGRR6Q,
+  2026-11-26). Before a session JukaHub reads the modules the mode loads, looks
+  each `DT_NEEDED` up where the loader will (the module's folder, the image's
+  libraries and graphics folders, the session's `LD_LIBRARY_PATH`, the
+  firmware's), and writes its own stand-in for a library that is missing
+  everywhere and that it knows how to answer — the way it does for the device
+  libraries of a desktop RetroArch core (`coredevstub.go`) — into
+  `data/windows-runtime/weston-libs`, appended to the session's library path
+  (last, so a firmware that carries the real library keeps it). Weston calls
+  into libjpeg only where it reads an image for a capture, which no Wine
+  program asks for, so the stand-in has to load, not decode; the log's
+  `display: WestonPack's Weston links …` line names what it covered.
 * **Input devices.** The stock firmware's udev has no `input_id` rule, and
   Weston ignores every input device udev did not tag — it then does not start
   at all. Before the first Windows program after a restart, JukaHub adds that

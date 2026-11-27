@@ -115,7 +115,9 @@ type launcherOutput struct {
 // never waits on a helper the script left running with the file open. nil
 // (and every method a no-op) when there is nothing to capture.
 func (d *gameDiagLaunch) captureLauncherOutput(cmd *exec.Cmd) *launcherOutput {
-	if d == nil || cmd == nil || IsWindows() || (!launcherShellScript(d.launcher) && !d.captureAny) ||
+	// A file works as stdout/stderr on Windows too. A program that already
+	// owns either stream (a Wine profile writing its own log) is left alone.
+	if d == nil || cmd == nil || (!launcherShellScript(d.launcher) && !d.captureAny) ||
 		cmd.Stdout != nil || cmd.Stderr != nil {
 		return nil
 	}
@@ -192,6 +194,13 @@ var launcherLoaderRe = regexp.MustCompile(`(?i)error while loading shared librar
 // with no game passed "$*" or "$1" on: one empty argument.
 var launcherBootFileRe = regexp.MustCompile(`^File not found:\s*(.*)$`)
 
+// launcherNoGameRe is RetroArch's refusal of a start with a core and no game:
+// "[ERROR] [Content]: Libretro core requires content, but nothing was
+// provided." A launch script written for games makes that of no game at all:
+// its "$*" is one empty argument, which RetroArch reads as the content path
+// (JH-DMFR6X, the ARCADE tile).
+var launcherNoGameRe = regexp.MustCompile(`(?i)libretro core requires content`)
+
 // launcherOutputFindings reads a launch script's output: an issue for what
 // it could not find (RetroArch when that is among them, else the first),
 // and its last lines for the card. RetroArch's own log lines ("[ERROR] …",
@@ -206,6 +215,7 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 	script := filepath.Base(strings.TrimSpace(launcher))
 	missing, missingLine := "", ""
 	bootFile, bootLine := "", ""
+	noGameLine := ""
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if line == "" {
@@ -218,6 +228,12 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 		if m := launcherBootFileRe.FindStringSubmatch(line); m != nil {
 			if bootLine == "" {
 				bootFile, bootLine = strings.TrimSpace(m[1]), line
+			}
+			continue
+		}
+		if launcherNoGameRe.MatchString(line) {
+			if noGameLine == "" {
+				noGameLine = line
 			}
 			continue
 		}
@@ -251,6 +267,9 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 	}
 	if len(excerpt) > launcherExcerptMax {
 		excerpt = excerpt[len(excerpt)-launcherExcerptMax:]
+	}
+	if noGameLine != "" {
+		issues = append(issues, launcherNoGameIssue(noGameLine, launcher))
 	}
 	if bootLine != "" {
 		issues = append(issues, launcherBootFileIssue(bootFile, bootLine, launcher))
@@ -314,6 +333,21 @@ func launcherBootFileIssue(name, line, launcher string) launchIssue {
 			Detail: script + ` passed an empty argument where the game goes, and the emulator quit on it ("` + line +
 				`" names no file). A script written for games passes the game on as "$*" or "$1", which is one empty argument when nothing is given, and PPSSPP takes any argument that does not start with "-" for the game to boot.`,
 		}
+	}
+	logWarn("gamediag", "%s: %s", is.Title, line)
+	return is
+}
+
+// launcherNoGameIssue is the issue for a RetroArch started with a core but no
+// game (launcherNoGameRe): the launch script passed "" where the game goes.
+func launcherNoGameIssue(line, launcher string) launchIssue {
+	script := filepath.Base(strings.TrimSpace(launcher))
+	is := launchIssue{
+		Level: int(gameDiagSure),
+		Title: "The launch script gave RetroArch no game",
+		Where: filepath.Dir(launcher),
+		Detail: script + " started RetroArch with a core but no game, and RetroArch quit on it (\"" + line +
+			"\"). A script written for games passes the game on as \"$*\" or \"$1\", which is one empty argument when nothing is given: start the game from Games, where the script gets it.",
 	}
 	logWarn("gamediag", "%s: %s", is.Title, line)
 	return is

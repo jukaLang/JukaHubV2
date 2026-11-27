@@ -844,6 +844,9 @@ func windowsAppsSetupLines(runtime windowsRuntimeStatus) []string {
 	if line := windowsRuntimeInstallLine(); line != "" {
 		lines = append(lines, "", line)
 	}
+	if line := wineComponentsSummary(); line != "" && !IsWindows() {
+		lines = append(lines, "", line)
+	}
 	if runtime.Problem != "" && !IsWindows() {
 		lines = append([]string{"Missing: " + runtime.Problem, ""}, lines...)
 	}

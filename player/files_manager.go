@@ -784,6 +784,9 @@ func feCrumbFit(font *ttf.Font, crumbs []feCrumb, avail int32) []feCrumb {
 		// Every crumb fit behind the ellipsis, so there is no gap to mark.
 		return crumbs
 	}
+	// A bare "…" looks like a broken chip: say how many folders it hides.
+	hidden := len(crumbs) - len(working) + 1
+	working[1].Label = "… " + itoa(hidden)
 	return working
 }
 
@@ -1139,16 +1142,28 @@ func renderFilesRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, entr
 	meta := feEntryMeta(entry)
 	if isLocation {
 		// A long mount path gives way before the place's name does.
-		meta = ellipsize(font, filesLocationMeta(loc), rowW*45/100)
+		meta = filesLocationMeta(loc)
+	}
+	// A file's name is the point of the row. The size/date meta gives way
+	// before it does: cap it, then drop it entirely when the name would be
+	// cut to a handful of characters.
+	maxMeta := rowW * 45 / 100
+	if meta != "" {
+		meta = ellipsize(font, meta, maxMeta)
 	}
 	metaW := int32(0)
 	if meta != "" {
 		metaW, _ = measureText(font, meta)
-		filesDrawPlainText(renderer, config, font, meta, ColorTextTertiary(), rowX+rowW-metaW-16, textY)
 	}
-
 	nameX := chipX + chipW + 12
 	nameAvail := rowX + rowW - metaW - 28 - nameX
+	if nameAvail < 160 && meta != "" {
+		meta, metaW = "", 0
+		nameAvail = rowX + rowW - 28 - nameX
+	}
+	if meta != "" {
+		filesDrawPlainText(renderer, config, font, meta, ColorTextTertiary(), rowX+rowW-metaW-16, textY)
+	}
 	if nameAvail < 80 {
 		nameAvail = 80
 	}

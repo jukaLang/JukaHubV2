@@ -469,6 +469,17 @@ func TestFirmwareROMArgAndLauncherOutput(t *testing.T) {
 		len(issues[0].Files) != 1 || issues[0].Files[0] != "/mnt/SDCARD/Roms/PSP/a.iso" {
 		t.Errorf("a game PPSSPP did not find: %+v", issues)
 	}
+	// JH-DMFR6X: the ARCADE tile's script gave RetroArch no game, and RetroArch
+	// said so itself instead of leaving "nothing JukaHub can check".
+	ra := []string{
+		`[ERROR] Couldn't find any input driver named "sdl"`,
+		"[ERROR] [Content]: Libretro core requires content, but nothing was provided.",
+		"TRIMUI Build:Apr 30 2025 10:42:38",
+	}
+	if issues, _ := launcherOutputFindings(ra, "/mnt/SDCARD/Emus/ARCADE/launch.sh"); len(issues) != 1 ||
+		issues[0].Title != "The launch script gave RetroArch no game" {
+		t.Errorf("RetroArch with no game: %+v", issues)
+	}
 
 	// A launcher's "#!" line, read the way the kernel reads it (MainUI runs
 	// the script itself): one interpreter, the rest of the line one argument.

@@ -379,7 +379,12 @@ gap, not a silent promise.
   ellipsis fallback.
 - `text-decoration` underline/strikethrough, `text-decoration-color`, pixel
   `text-decoration-thickness`, and `solid`/`double`/`dotted`/`dashed`/`wavy`
-  `text-decoration-style`.
+  `text-decoration-style`. `text-underline-offset` moves the underline away
+  from (`8px`, `0.2em`) or toward (`-2px`) the text; `auto` keeps the reader's
+  own placement, as a browser's does. Strikethroughs are not moved by it.
+- `font-variant-caps: small-caps`, `font-variant: small-caps` and the petite,
+  unicase and titling spellings set lower-case letters as capitals a size
+  smaller; other `font-variant` sub-properties are ignored.
 - `text-shadow`: the first visible layer's offset and colour; its blur only
   softens the alpha.
 - `box-shadow`: the first visible outer layer, with its offset, blur (a soft
@@ -387,7 +392,15 @@ gap, not a silent promise.
   layers are skipped.
 - Borders in `solid`, `dashed`, `dotted`, `double`, `none` and `hidden`
   styles; border width and colour; outlines as a separate box edge with
-  `outline-offset`; list styles and list-style none. A list whose page sets
+  `outline-offset`; list styles and list-style none. The logical spellings
+  `border-inline`, `border-block`, `border-inline-start`/`-end`,
+  `border-block-start`/`-end`, their `-width` longhands (one value or an
+  inline/block start-then-end pair) and the four logical corner radii
+  (`border-start-start-radius`, …) draw the physical edge this horizontal,
+  left-to-right reader has: inline-start is the left edge and block-end the
+  bottom one. A physical declaration the page also sets (`border-left`) wins
+  over the logical shorthand, and a side beats the axis shorthand that covers
+  it. A list whose page sets
   its start padding (`ul { padding: 0 }`) drops the reader's 18px item
   gutter, which stands in for the browser's 40px list padding.
 - `visibility: hidden/collapse` keeps the element's flow and text metrics and

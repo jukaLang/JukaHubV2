@@ -130,7 +130,8 @@ func webPaintJoinGap(prev *webPaintRun, run *webRunPos, spaceW int32) (int32, bo
 	}
 	if a.Color != run.Color || a.Bold != run.Bold || a.Underline != run.Underline || a.Strike != run.Strike ||
 		a.DecorationColor != run.DecorationColor || a.HasDecorationColor != run.HasDecorationColor ||
-		a.DecorationThickness != run.DecorationThickness || a.DecorationStyle != run.DecorationStyle {
+		a.DecorationThickness != run.DecorationThickness || a.DecorationStyle != run.DecorationStyle ||
+		a.DecorationOffset != run.DecorationOffset {
 		return 0, false
 	}
 	if a.HasShadow != run.HasShadow || a.ShadowX != run.ShadowX || a.ShadowY != run.ShadowY ||
@@ -247,7 +248,7 @@ func drawWebPaintRowAt(r *sdl.Renderer, config *Config, runs []webPaintRun, x0, 
 				thickness = 1
 			}
 			if run.Underline {
-				for _, seg := range webDecorationPaintRects(x0+run.X, textY+int32(run.Font.Height())-5, pr.w, thickness, run.DecorationStyle) {
+				for _, seg := range webDecorationPaintRects(x0+run.X, webUnderlinePaintY(run, textY), pr.w, thickness, run.DecorationStyle) {
 					r.FillRect(&seg)
 				}
 			}

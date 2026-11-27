@@ -152,15 +152,16 @@ func notifPost(s notifSpec) {
 
 // notifStoredRow is one row in the file.
 type notifStoredRow struct {
-	Msg    string       `json:"msg"`
-	Prio   int          `json:"prio,omitempty"`
-	At     int64        `json:"at,omitempty"` // unix milliseconds
-	N      uint64       `json:"n,omitempty"`  // order filed: larger is newer
-	Read   bool         `json:"read,omitempty"`
-	Repeat int          `json:"repeat,omitempty"`
-	Source string       `json:"source,omitempty"`
-	Key    string       `json:"key,omitempty"`
-	Act    *notifAction `json:"act,omitempty"`
+	Msg    string `json:"msg"`
+	Prio   int    `json:"prio,omitempty"`
+	At     int64  `json:"at,omitempty"` // unix milliseconds
+	N      uint64 `json:"n,omitempty"`  // order filed: larger is newer
+	Read   bool   `json:"read,omitempty"`
+	Repeat int    `json:"repeat,omitempty"`
+	Source string `json:"source,omitempty"`
+	Key    string `json:"key,omitempty"`
+	// Live download rows are deliberately not written to the card.
+	Act *notifAction `json:"act,omitempty"`
 }
 
 // notifStoredFile is the file.
@@ -292,7 +293,7 @@ func notifParseStore(data []byte) []notification {
 func notifEncodeStore(rows []notification) []byte {
 	f := notifStoredFile{V: notifStoreVersion}
 	for _, n := range rows {
-		if !notifKeeps(n) {
+		if !notifKeeps(n) || n.Key == notifDownloadKey {
 			continue
 		}
 		r := notifStoredRow{Msg: notifCutBytes(n.Message, notifStoreMaxMsg), Prio: int(n.Priority), N: n.ID,

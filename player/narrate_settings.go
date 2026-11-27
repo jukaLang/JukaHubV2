@@ -247,11 +247,10 @@ func narrVoiceWatchLoop() {
 			if tool == "offline voice" && total > 0 {
 				if q := int(done * 4 / total); q > quarter && q > 0 && q < 4 {
 					quarter = q
-					pct := q * 25
-					tbxPost(func() {
-						narrPlayEarcon(narrEarconWait)
-						ShowToast("Narration voice: "+strconv.Itoa(pct)+"% downloaded", ToastKindInfo)
-					})
+					// The install bar and the live notification row already
+					// show the percentage: a toast saying it again was the
+					// duplicate indicator. Keep only the earcon.
+					tbxPost(func() { narrPlayEarcon(narrEarconWait) })
 				}
 			}
 			continue

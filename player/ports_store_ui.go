@@ -183,11 +183,18 @@ func pstoreDrawTabs(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fram
 		if w <= 40 {
 			break
 		}
+		if tw, _, err := fonts.body.SizeUTF8(label); err == nil && int(tw) > int(w-16) {
+			label = ellipsize(fonts.body, label, w-16)
+		}
 		id := pstoreTabIDs[i]
 		rect := sdl.Rect{X: x, Y: 0, W: w, H: pstoreTabH}
 		screen := rect
 		screen.Y += top
-		tbxDrawButton(renderer, config, fonts.body, screen, label, i == pstore.tab, nav.focused(id), false)
+		on := i == pstore.tab
+		tbxDrawButton(renderer, config, fonts.body, screen, label, on, nav.focused(id), false)
+		if on {
+			drawTabUnderline(renderer, screen)
+		}
 		nav.add(id, rect, 0, false)
 		x += w + 10
 	}
@@ -239,12 +246,12 @@ func pstoreDrawChips(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fra
 	nav := &pstore.nav
 	x := frame.x
 	right := frame.x + frame.w
-	chip := func(id, label string, on bool) bool {
+	chip := func(id, label string, on bool, cy int32) bool {
 		w := tbxButtonWidth(fonts.small, label, 0)
 		if x+w > right {
 			return false
 		}
-		rect := sdl.Rect{X: x, Y: y, W: w, H: pstoreChipH}
+		rect := sdl.Rect{X: x, Y: cy, W: w, H: pstoreChipH}
 		scr := rect
 		scr.Y += top
 		tbxDrawButton(renderer, config, fonts.small, scr, label, on, nav.focused(id), false)
@@ -252,17 +259,33 @@ func pstoreDrawChips(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fra
 		x += w + 8
 		return true
 	}
-	chip("search", pstore.searchLabel, pstore.query != "")
-	chip("sort", pstoreSortChips[pstore.sort], false)
-	if chip("genre:", "All genres", pstore.genre == "") {
+	chip("search", pstore.searchLabel, pstore.query != "", y)
+	chip("sort", pstoreSortChips[pstore.sort], false, y)
+	genreY := y
+	if chip("genre:", "All genres", pstore.genre == "", y) {
 		for k, g := range pstore.genres {
-			if k >= len(pstore.genreIDs) || !chip(pstore.genreIDs[k], pstore.genreLabels[k], g == pstore.genre) {
+			if k >= len(pstore.genreIDs) {
+				break
+			}
+			id, label := pstore.genreIDs[k], pstore.genreLabels[k]
+			if chip(id, label, g == pstore.genre, genreY) {
+				continue
+			}
+			// Labels that do not fit used to break the loop, so genres after
+			// the first overflow could never be chosen. Give them a second
+			// row, the way Homebrew wraps its console chips.
+			if genreY != y {
+				break
+			}
+			genreY = y + pstoreChipH + 6
+			x = frame.x
+			if !chip(id, label, g == pstore.genre, genreY) {
 				break
 			}
 		}
 	}
-	nav.extend(y + pstoreChipH)
-	return y + pstoreChipH + 12
+	nav.extend(genreY + pstoreChipH)
+	return genreY + pstoreChipH + 12
 }
 
 // pstoreDrawGrid draws the All, Ready to Run and Bring your game tabs.
@@ -655,7 +678,32 @@ func pstoreOpenDetail(e mcCatalogEntry, idx int, launch string, compat portCompa
 	case e.RTR:
 		b.WriteString("Nothing else: it is Ready to Run.")
 	default:
-		b.WriteString("Its game files, from a copy you own. Once it is installed, the Why didn't it start? button here shows the port's README, which says where they go.")
+		b.WriteString("Its game files, from a copy you own. The folder they go in is named under Where its game files go.")
+	}
+	if !e.RTR {
+		b.WriteString("\n\n## Where its game files go\n")
+		dir := ""
+		if d.launch != "" {
+			dir, _ = gameDiagPortDir(d.launch)
+		}
+		switch {
+		case dir != "":
+			folder, sub := portGameDataFolder(dir)
+			what := "the port's own folder"
+			if sub != "" {
+				what = "its " + sub + " folder"
+			}
+			b.WriteString("Copy the game's own files into " + what + " on the card (" + gameDiagPortCardPath(folder) +
+				"), keeping the folders they come in as they are in your copy.")
+			if gameDiagDirHasGameFiles(folder, 2) {
+				b.WriteString(" It already has files in it.")
+			} else {
+				b.WriteString(" It has no game files in it yet, so the port stops until they are there.")
+			}
+			b.WriteString(" Why didn't it start? names the file a port waits for.")
+		default:
+			b.WriteString("Install the port first: these details then name the exact folder on the card (Data/ports) to copy them into, and Why didn't it start? names the file a port waits for.")
+		}
 	}
 	if len(e.Runtime) > 0 {
 		b.WriteString("\n\n## Runtimes PortMaster adds\n")

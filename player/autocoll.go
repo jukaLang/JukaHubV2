@@ -25,6 +25,14 @@ package main
 //   - Multiplayer: the games whose details (the game page's libretro lookup,
 //     gmeta) say two players or more.
 //   - a folder per genre the details know for three games or more.
+//   - a folder per decade (1980s, 1990s…) and per player count (1, 2, 3+),
+//     from the same details: the year and players fields gmeta_dat.go reads.
+//     A game can sit in a genre, a decade and a player-count folder at once;
+//     the folders are views over one listing, not copies of it.
+//
+// The grouping itself is autoCollGroupGames: one pass over the listing and one
+// metadata lookup, free of the store and the caches, so a test can feed it a
+// fixture and call it again when the details arrive late.
 //
 // They sit on the Collections tab above the user's own collections, each with
 // its own remembered view ("col:<id>", like any collection). Settings → Games
@@ -63,6 +71,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -82,16 +91,28 @@ const (
 	autoCollGenreMin    = 3
 	autoCollGenreMax    = 24
 	autoCollGenreName   = 40
+	// Decades and player counts are few by nature (a dozen decades at most,
+	// three counts), so a folder holding one game is still worth showing when
+	// its switch is on; the cap only guards a nonsense year or count.
+	autoCollSmartMin = 1
+	autoCollSmartMax = 24
+	autoCollYearMin  = 1900
+	autoCollYearMax  = 2100
 )
 
 // The folder ids added here; Most played, Recently added and Never played
 // keep the ids hometabs_collections.go gave them, so a favourite of one
 // still resolves.
 const (
-	autoCollIDLast      = "auto-last"
-	autoCollIDAll       = "auto-all"
-	autoCollIDMulti     = "auto-multi"
-	autoCollGenrePrefix = "auto-genre-"
+	autoCollIDLast       = "auto-last"
+	autoCollIDAll        = "auto-all"
+	autoCollIDBacklog    = "auto-backlog"
+	autoCollIDPlaying    = "auto-playing"
+	autoCollIDBeaten     = "auto-beaten"
+	autoCollIDMulti      = "auto-multi"
+	autoCollGenrePrefix  = "auto-genre-"
+	autoCollDecadePrefix = "auto-decade-"
+	autoCollPlayerPrefix = "auto-players-"
 )
 
 // autoCollSwitch is one switch of the Settings sheet: the name stored in
@@ -110,8 +131,13 @@ var autoCollSwitches = []autoCollSwitch{
 	// before the switches existed, so an update does not take them away.
 	{"added", "Recently added", "The games that turned up on the card last", true},
 	{"unplayed", "Never played", "The games you have not started yet", true},
+	{"backlog", "Backlog", "Games you tagged Backlog, waiting longest first", true},
+	{"playing", "Playing now", "Games you tagged Playing, most recent first", true},
+	{"beaten", "Beaten this year", "Games tagged Completed this year", true},
 	{"multi", "Multiplayer", "Two players or more, from the games' details", false},
 	{"genres", "Genres", "A folder per genre with three games or more, from the games' details", false},
+	{"decades", "Decades", "A folder per decade (1980s, 1990s…), from the games' details", false},
+	{"players", "Player count", "A folder for 1, 2 and 3+ players, from the games' details", false},
 }
 
 // autoCollSwitchID is the folder a switch shows ("" for the genres, which
@@ -128,6 +154,12 @@ func autoCollSwitchID(name string) string {
 		return homeTabsAutoAdded
 	case "unplayed":
 		return homeTabsAutoUnplayed
+	case "backlog":
+		return autoCollIDBacklog
+	case "playing":
+		return autoCollIDPlaying
+	case "beaten":
+		return autoCollIDBeaten
 	case "multi":
 		return autoCollIDMulti
 	}
@@ -163,6 +195,20 @@ func autoCollEnabled(c *Config) map[string]bool {
 	return out
 }
 
+// autoCollSwitchKey is which switches are on, in the tab's order: a library
+// cache key changes with it, so hiding an automatic collection takes effect
+// on the next frame without a restart.
+func autoCollSwitchKey(c *Config) string {
+	en := autoCollEnabled(c)
+	names := make([]string, 0, len(autoCollSwitches))
+	for _, s := range autoCollSwitches {
+		if en[s.name] {
+			names = append(names, s.name)
+		}
+	}
+	return strings.Join(names, ",")
+}
+
 // autoCollSetSwitch turns one switch on or off and rebuilds Home's pages.
 // Everything off is stored as "none": an empty value would read as unset.
 func autoCollSetSwitch(c *Config, name string, on bool) {
@@ -190,7 +236,7 @@ func autoCollSetSwitch(c *Config, name string, on bool) {
 func autoCollSettingsRow() setRow {
 	return setRow{
 		ID: autoCollSettingKey, Label: "Automatic collections", Kind: setKindAction,
-		Detail: setStatic("Folders on Home's Collections tab that fill themselves"),
+		Detail: setStatic("Folders on Home's Collections tab and in the Games library that fill themselves"),
 		Value: func(c *Config) string {
 			n := len(autoCollEnabled(c))
 			if n == 0 {
@@ -227,7 +273,7 @@ func autoCollOpenSheet(c *Config) {
 		setHub.dirty = true
 	}
 	setSheetOpen(&setHub.sheet, "Automatic collections",
-		hintLine(FooterHint{"A", "On or off"})+" · they appear on Home's Collections tab",
+		hintLine(FooterHint{"A", "On or off"})+" · they appear on Home's Collections tab and in the Games library",
 		autoCollSheetOptions(c), "", choose)
 }
 
@@ -535,12 +581,14 @@ type autoCollGenre struct {
 // autoCollIdx holds the collections built from one library snapshot; each
 // list is made the first time it is asked for. Render thread only.
 var autoCollIdx struct {
-	sig        autoCollSig
-	built      bool
-	games      []libraryGame
-	lists      map[string][]libraryGame
-	genres     []autoCollGenre
-	genresDone bool
+	sig         autoCollSig
+	built       bool
+	games       []libraryGame
+	lists       map[string][]libraryGame
+	genres      []autoCollGenre
+	decades     []autoCollGenre
+	players     []autoCollGenre
+	detailsDone bool
 }
 
 // autoCollSync starts a fresh build when the library, the details, the
@@ -570,7 +618,8 @@ func autoCollSync() {
 	}
 	autoCollIdx.sig, autoCollIdx.built = sig, true
 	autoCollIdx.lists = map[string][]libraryGame{}
-	autoCollIdx.genres, autoCollIdx.genresDone = nil, false
+	autoCollIdx.genres, autoCollIdx.decades, autoCollIdx.players = nil, nil, nil
+	autoCollIdx.detailsDone = false
 	games := make([]libraryGame, 0, lib.Total)
 	// Kid mode keeps the kids' games only (uimode_kids.go), as on the Games tab.
 	for _, system := range uiModeKidSystems(filterHiddenLibrarySystems(lib.Systems, sig.hidden)) {
@@ -585,23 +634,56 @@ func autoCollSync() {
 // autoCollIDs is the automatic folders the tab lists, in order: the
 // switches that are on, a genre switch standing for every genre folder.
 func autoCollIDs(c *Config) []string {
+	autoCollSync()
+	if autoCollNeedsDetails(c) {
+		autoCollDetails()
+	}
+	return autoCollIDList(c)
+}
+
+// autoCollNeedsDetails reports whether a switch that reads the games' details
+// is on: with all of them off, a fresh listing costs no metadata pass.
+func autoCollNeedsDetails(c *Config) bool {
+	en := autoCollEnabled(c)
+	return en["multi"] || en["genres"] || en["decades"] || en["players"]
+}
+
+// autoCollIDList is autoCollIDs over the collections already built: the
+// switches as they are now, without touching the library or the store, so a
+// test can hand it a fixture and a config.
+func autoCollIDList(c *Config) []string {
 	en := autoCollEnabled(c)
 	ids := make([]string, 0, len(autoCollSwitches))
 	for _, s := range autoCollSwitches {
 		if !en[s.name] {
 			continue
 		}
-		if s.name != "genres" {
-			ids = append(ids, autoCollSwitchID(s.name))
-			continue
-		}
-		autoCollSync()
-		autoCollDetails()
-		for _, g := range autoCollIdx.genres {
-			ids = append(ids, g.id)
+		switch s.name {
+		case "genres", "decades", "players":
+			// One switch stands for many folders.
+			for _, g := range autoCollFoldersForSwitch(s.name) {
+				ids = append(ids, g.id)
+			}
+		default:
+			if id := autoCollSwitchID(s.name); id != "" {
+				ids = append(ids, id)
+			}
 		}
 	}
 	return ids
+}
+
+// autoCollFoldersForSwitch is the folders a many-folder switch shows.
+func autoCollFoldersForSwitch(name string) []autoCollGenre {
+	switch name {
+	case "genres":
+		return autoCollIdx.genres
+	case "decades":
+		return autoCollIdx.decades
+	case "players":
+		return autoCollIdx.players
+	}
+	return nil
 }
 
 // autoCollName is an automatic folder's name, "" for an id that is not one
@@ -618,19 +700,34 @@ func autoCollName(id string) string {
 		return "Recently added"
 	case homeTabsAutoUnplayed:
 		return "Never played"
+	case autoCollIDBacklog:
+		return "Backlog"
+	case autoCollIDPlaying:
+		return "Playing now"
+	case autoCollIDBeaten:
+		return "Beaten this year"
 	case autoCollIDMulti:
 		return "Multiplayer"
 	}
-	if strings.HasPrefix(id, autoCollGenrePrefix) {
+	if autoCollIsSmartID(id) {
 		autoCollSync()
 		autoCollDetails()
-		for _, g := range autoCollIdx.genres {
-			if g.id == id {
-				return g.name
+		for _, list := range [][]autoCollGenre{autoCollIdx.genres, autoCollIdx.decades, autoCollIdx.players} {
+			for _, g := range list {
+				if g.id == id {
+					return g.name
+				}
 			}
 		}
 	}
 	return ""
+}
+
+// autoCollIsSmartID reports whether an id names a folder the metadata makes.
+func autoCollIsSmartID(id string) bool {
+	return strings.HasPrefix(id, autoCollGenrePrefix) ||
+		strings.HasPrefix(id, autoCollDecadePrefix) ||
+		strings.HasPrefix(id, autoCollPlayerPrefix)
 }
 
 // autoCollGames is an automatic folder's games. The slice is shared with the
@@ -659,7 +756,13 @@ func autoCollGames(id string) []libraryGame {
 		list = autoCollRecentlyAdded()
 	case id == homeTabsAutoUnplayed:
 		list = autoCollNeverPlayed()
-	case id == autoCollIDMulti || strings.HasPrefix(id, autoCollGenrePrefix):
+	case id == autoCollIDBacklog:
+		list = autoCollTagged(gmetaTagBacklog, false)
+	case id == autoCollIDPlaying:
+		list = autoCollTagged(gmetaTagPlaying, false)
+	case id == autoCollIDBeaten:
+		list = autoCollTagged(gmetaTagCompleted, true)
+	case id == autoCollIDMulti || autoCollIsSmartID(id):
 		// autoCollDetails files these lists itself.
 		autoCollDetails()
 		if have, ok := autoCollIdx.lists[id]; ok {
@@ -668,6 +771,69 @@ func autoCollGames(id string) []libraryGame {
 	}
 	autoCollIdx.lists[id] = list
 	return list
+}
+
+// autoCollTagged is one of the journal folders: games carrying a tag in their
+// saved game page. Beaten this year also needs a completion stamp this year;
+// a game marked Completed before January is not new news.
+//
+// These read the same tags the game page's status sheet writes, so there is no
+// second copy of the status to keep in sync. A game whose page was never
+// opened has no tag and is not in any of the three folders.
+func autoCollTagged(tag string, thisYear bool) []libraryGame {
+	type entry struct {
+		game      libraryGame
+		completed time.Time
+	}
+	var found []entry
+	year := time.Now().Year()
+	for _, g := range autoCollIdx.games {
+		rec, ok := gmetaGet(g.System, g.Title)
+		if !ok || !gmetaHasTag(rec, tag) {
+			continue
+		}
+		e := entry{game: g}
+		if thisYear {
+			e.completed = autoCollCompletionTime(rec)
+			if e.completed.Year() != year {
+				continue
+			}
+		}
+		found = append(found, e)
+	}
+	switch tag {
+	case gmetaTagBacklog:
+		// Waiting longest first, so the list doubles as a "what next?" queue.
+		sort.SliceStable(found, func(i, j int) bool {
+			if !found[i].game.AddedAt.Equal(found[j].game.AddedAt) {
+				return found[i].game.AddedAt.Before(found[j].game.AddedAt)
+			}
+			return strings.ToLower(found[i].game.Label()) < strings.ToLower(found[j].game.Label())
+		})
+	case gmetaTagPlaying:
+		sort.SliceStable(found, func(i, j int) bool { return found[i].game.LastPlayed.After(found[j].game.LastPlayed) })
+	default:
+		sort.SliceStable(found, func(i, j int) bool { return found[i].completed.After(found[j].completed) })
+	}
+	list := make([]libraryGame, 0, len(found))
+	for _, e := range found {
+		list = append(list, e.game)
+	}
+	return autoCollCut(list, autoCollListMax)
+}
+
+// autoCollCompletionTime is when a game was tagged Completed, recorded by the
+// game page when the tag is first set.
+func autoCollCompletionTime(rec gmetaRecord) time.Time {
+	stamp := rec.Milestones[gmetaMilestoneCompleted]
+	if strings.TrimSpace(stamp) == "" {
+		return time.Time{}
+	}
+	at, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return time.Time{}
+	}
+	return at
 }
 
 // autoCollCut bounds a list.
@@ -779,14 +945,115 @@ func autoCollNeverPlayed() []libraryGame {
 	return autoCollCut(list, autoCollUnplayedMax)
 }
 
-// autoCollDetails files Multiplayer and the genre folders from the games'
-// details. Only the consoles the details know anything for are looked up,
-// so a large card costs a title fold per game of those consoles only.
+// autoCollMeta is the part of a game's details the smart folders read.
+type autoCollMeta struct {
+	Genre   string
+	Year    string
+	Players string
+}
+
+// autoCollSmartGroups is what one listing's metadata makes.
+type autoCollSmartGroups struct {
+	multi   []libraryGame
+	genres  []autoCollGenre
+	decades []autoCollGenre
+	players []autoCollGenre
+}
+
+// autoCollGroupGames groups a library listing by the details each game has:
+// the multiplayer list, a folder per genre, per decade and per player count.
+// It is the whole decision, free of the store and the caches, so a test can
+// feed it fixtures, and call it again when details arrive late or change.
+// A game can land in a genre, a decade and a player-count folder at once: the
+// folders are views over the one listing, so nothing is copied per folder and
+// no game is stopped from being in two of them.
+func autoCollGroupGames(games []libraryGame, meta func(libraryGame) (autoCollMeta, bool)) autoCollSmartGroups {
+	var out autoCollSmartGroups
+	genres := map[string]*autoCollGenre{}
+	decades := map[string]*autoCollGenre{}
+	players := map[string]*autoCollGenre{}
+	for _, g := range games {
+		m, ok := meta(g)
+		if !ok {
+			continue
+		}
+		count := autoCollPlayers(m.Players)
+		if count >= 2 {
+			out.multi = append(out.multi, g)
+		}
+		if name := autoCollGenreLabel(m.Genre); name != "" {
+			autoCollAddGroup(genres, autoCollGenrePrefix+autoCollSlug(name), name, g)
+		}
+		if year := autoCollYear(m.Year); year > 0 {
+			decade := year / 10 * 10
+			name := strconv.Itoa(decade) + "s"
+			autoCollAddGroup(decades, autoCollDecadePrefix+name, name, g)
+		}
+		if count > 0 {
+			bucket, name := 1, "1 player"
+			switch {
+			case count == 2:
+				bucket, name = 2, "2 players"
+			case count >= 3:
+				bucket, name = 3, "3+ players"
+			}
+			autoCollAddGroup(players, autoCollPlayerPrefix+strconv.Itoa(bucket), name, g)
+		}
+	}
+	autoCollSortAZ(out.multi)
+	out.genres = autoCollFolderList(genres, autoCollGenreMin, autoCollGenreMax)
+	out.decades = autoCollFolderList(decades, autoCollSmartMin, autoCollSmartMax)
+	out.players = autoCollFolderList(players, autoCollSmartMin, autoCollSmartMax)
+	return out
+}
+
+// autoCollAddGroup files a game under one folder id, making the folder first.
+func autoCollAddGroup(groups map[string]*autoCollGenre, id, name string, g libraryGame) {
+	grp := groups[id]
+	if grp == nil {
+		grp = &autoCollGenre{id: id, name: name}
+		groups[id] = grp
+	}
+	grp.games = append(grp.games, g)
+}
+
+// autoCollFolderList turns a pass's groups into the folders the tab lists:
+// those of at least min games, the biggest when there are more than max, then
+// by name with each folder's games A to Z.
+func autoCollFolderList(groups map[string]*autoCollGenre, min, max int) []autoCollGenre {
+	out := make([]autoCollGenre, 0, len(groups))
+	for _, grp := range groups {
+		if len(grp.games) >= min {
+			out = append(out, *grp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if len(out[i].games) != len(out[j].games) {
+			return len(out[i].games) > len(out[j].games)
+		}
+		return out[i].id < out[j].id
+	})
+	if len(out) > max {
+		out = out[:max]
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].name) < strings.ToLower(out[j].name)
+	})
+	for i := range out {
+		autoCollSortAZ(out[i].games)
+	}
+	return out
+}
+
+// autoCollDetails files Multiplayer, the genre folders, the decade folders and
+// the player-count folders from the games' details. Only the consoles whose
+// details carry something these read are looked up, so a large card costs a
+// title fold per game of those consoles only.
 func autoCollDetails() {
-	if autoCollIdx.genresDone {
+	if autoCollIdx.detailsDone {
 		return
 	}
-	autoCollIdx.genresDone = true
+	autoCollIdx.detailsDone = true
 	gmetaStore.mu.Lock()
 	if !gmetaStore.loaded {
 		gmetaStore.mu.Unlock()
@@ -801,61 +1068,50 @@ func autoCollDetails() {
 	}
 	consoles := map[string]bool{}
 	for _, rec := range gmetaStore.games {
-		if rec != nil && (strings.TrimSpace(rec.Genre) != "" || autoCollPlayers(rec.Players) >= 2) {
+		if rec != nil && (strings.TrimSpace(rec.Genre) != "" || strings.TrimSpace(rec.Year) != "" || autoCollPlayers(rec.Players) > 0) {
 			consoles[strings.ToLower(strings.TrimSpace(rec.System))] = true
 		}
 	}
-	var multi []libraryGame
-	groups := map[string]*autoCollGenre{}
-	for _, g := range autoCollIdx.games {
+	meta := func(g libraryGame) (autoCollMeta, bool) {
 		if len(consoles) == 0 || !consoles[strings.ToLower(strings.TrimSpace(g.System))] {
-			continue
+			return autoCollMeta{}, false
 		}
 		rec := gmetaStore.games[gmetaKey(g.System, g.Title)]
 		if rec == nil {
-			continue
+			return autoCollMeta{}, false
 		}
-		if autoCollPlayers(rec.Players) >= 2 {
-			multi = append(multi, g)
-		}
-		name := autoCollGenreLabel(rec.Genre)
-		if name == "" {
-			continue
-		}
-		id := autoCollGenrePrefix + autoCollSlug(name)
-		grp := groups[id]
-		if grp == nil {
-			grp = &autoCollGenre{id: id, name: name}
-			groups[id] = grp
-		}
-		grp.games = append(grp.games, g)
+		return autoCollMeta{Genre: rec.Genre, Year: rec.Year, Players: rec.Players}, true
 	}
+	groups := autoCollGroupGames(autoCollIdx.games, meta)
 	gmetaStore.mu.Unlock()
 
-	autoCollSortAZ(multi)
-	autoCollIdx.lists[autoCollIDMulti] = multi
-	genres := make([]autoCollGenre, 0, len(groups))
-	for _, grp := range groups {
-		if len(grp.games) >= autoCollGenreMin {
-			genres = append(genres, *grp)
+	autoCollIdx.lists[autoCollIDMulti] = groups.multi
+	autoCollIdx.genres, autoCollIdx.decades, autoCollIdx.players = groups.genres, groups.decades, groups.players
+	for _, list := range [][]autoCollGenre{groups.genres, groups.decades, groups.players} {
+		for i := range list {
+			autoCollIdx.lists[list[i].id] = list[i].games
 		}
 	}
-	// The biggest genres when there are too many, then A to Z.
-	sort.Slice(genres, func(i, j int) bool {
-		if len(genres[i].games) != len(genres[j].games) {
-			return len(genres[i].games) > len(genres[j].games)
+}
+
+// autoCollYear reads a game's year ("1991", "1991-08-23", "c. 1991"): the
+// first four-digit year in it that could be one, 0 when there is none.
+func autoCollYear(text string) int {
+	year, digits := 0, 0
+	for _, r := range text + " " {
+		if r >= '0' && r <= '9' {
+			if digits < 4 {
+				year = year*10 + int(r-'0')
+				digits++
+			}
+			continue
 		}
-		return genres[i].id < genres[j].id
-	})
-	if len(genres) > autoCollGenreMax {
-		genres = genres[:autoCollGenreMax]
+		if digits == 4 && year >= autoCollYearMin && year <= autoCollYearMax {
+			return year
+		}
+		year, digits = 0, 0
 	}
-	sort.Slice(genres, func(i, j int) bool { return strings.ToLower(genres[i].name) < strings.ToLower(genres[j].name) })
-	for i := range genres {
-		autoCollSortAZ(genres[i].games)
-		autoCollIdx.lists[genres[i].id] = genres[i].games
-	}
-	autoCollIdx.genres = genres
+	return 0
 }
 
 // autoCollPlayers reads a player count ("2", "1-4", "4 players"): the

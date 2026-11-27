@@ -63,6 +63,9 @@ func TestMain(m *testing.M) {
 	gmetaDir, gmetaErr := os.MkdirTemp("", "jukahub-gamemeta")
 	if gmetaErr == nil {
 		gmetaStorePath = func() string { return filepath.Join(gmetaDir, "games.json") }
+		// Playtime has its own files (playtime_store.go): never the real ones.
+		playtimeStorePath = func() string { return filepath.Join(gmetaDir, playtimeFileName) }
+		playtimeSessionsPath = func() string { return filepath.Join(gmetaDir, playtimeSessionsFileName) }
 		gmetaDatDir = func() string { return filepath.Join(gmetaDir, "libretro") }
 		rommJournalPath = func() string { return filepath.Join(gmetaDir, "rom-journal.json") }
 		// Core replacements in the suite note their builds (corebuilds_history.go).

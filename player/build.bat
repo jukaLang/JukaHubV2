@@ -376,6 +376,13 @@ for /f "delims=" %%T in ('%PS% -NoProfile -Command "[DateTime]::UtcNow.ToString(
 if not defined BUILD_TIME (set "ERR=Could not read the current time for the build stamp." & exit /b 1)
 set "BUILD_DATE=%BUILD_TIME:~0,10%"
 
+REM Release builds are GUI-subsystem executables: a double-clicked JukaHub must
+REM not open a console window beside it. There is no stderr then, so warnings
+REM and errors are appended to %LOCALAPPDATA%\JukaHub\logs\errors.txt instead
+REM (player/logfile.go). JUKAHUB_CONSOLE=1 keeps a console build for debugging.
+set "GUI_LDFLAGS=-H windowsgui"
+if defined JUKAHUB_CONSOLE set "GUI_LDFLAGS="
+
 REM Google Drive sign-in (docs/CLOUD_SYNC.md): the OAuth client is stamped in
 REM only when JUKAHUB_GOOGLE_CLIENT_ID is set; without it the Save sync page
 REM says this build has no Google sign-in.
@@ -395,7 +402,7 @@ echo Building %OUT% ...
 echo   NOTE: the FIRST build compiles the SDL2 cgo bindings and can take
 echo   3-10 minutes. Later builds use the Go cache and take seconds.
 echo.
-"%GO_EXE%" build -v -ldflags "-s -w -X main.buildDate=%BUILD_DATE% -X main.buildTime=%BUILD_TIME%%GOOGLE_LDFLAGS%" -o "%OUT%" . || (set "ERR=go build failed - see the compiler output above." & exit /b 1)
+"%GO_EXE%" build -v -ldflags "-s -w %GUI_LDFLAGS% -X main.buildDate=%BUILD_DATE% -X main.buildTime=%BUILD_TIME%%GOOGLE_LDFLAGS%" -o "%OUT%" . || (set "ERR=go build failed - see the compiler output above." & exit /b 1)
 if not exist "%OUT%" (set "ERR=go build reported success but %OUT% is missing." & exit /b 1)
 exit /b 0
 

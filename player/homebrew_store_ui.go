@@ -160,10 +160,16 @@ func hbDrawChips(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame t
 		if x+w > right && x > frame.x {
 			x, y, row = frame.x, y+hbChipH+8, row+1
 		}
+		if tw, _, err := fonts.small.SizeUTF8(label); err == nil && int(tw) > int(w-16) {
+			label = ellipsize(fonts.small, label, w-16)
+		}
 		rect := sdl.Rect{X: x, Y: y, W: w, H: hbChipH}
 		scr := rect
 		scr.Y += top
 		tbxDrawButton(renderer, config, fonts.small, scr, label, on, nav.focused(id), false)
+		if on {
+			drawTabUnderline(renderer, scr)
+		}
 		nav.add(id, rect, row, false)
 		x += w + 8
 	}

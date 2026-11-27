@@ -169,6 +169,11 @@ func (h *logRingHandler) Handle(_ context.Context, r slog.Record) error {
 	if r.Level >= h.stderr {
 		_, _ = os.Stderr.WriteString(line + "\n")
 	}
+	// A GUI-subsystem Windows build has no stderr to copy to, so warnings and
+	// errors also go to errors.txt in the log folder (logfile.go).
+	if r.Level >= slog.LevelWarn {
+		logFileAppend(line)
+	}
 	return nil
 }
 

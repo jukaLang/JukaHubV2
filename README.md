@@ -11,164 +11,108 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2/badge)](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/R9qgJjh5jG)
 
+**A media hub and games console for your TrimUI handheld — one folder on the SD
+card, on top of the stock firmware.**
+
+YouTube on the couch, your ROM library with box art and save-resume, PS4/PS5
+Remote Play anywhere your Wi-Fi reaches, LAN play in the same room, and your
+phone as a keyboard — every screen driven by the D-pad you already have.
+Nothing is flashed and nothing is replaced, so deleting one folder puts the
+device back exactly as it was.
+
+**[Download](https://github.com/jukaLang/JukaHubV2/releases/latest)** ·
+**[The ten-minute tour](docs/TOUR.md)** ·
+[Web builder](https://generate.jukalang.com) ·
+[Controls](docs/CONTROLS.md) ·
+[Discord](https://discord.gg/R9qgJjh5jG)
+
 <p align="center">
-  <img src="screenshots/home.png" alt="The JukaHub Home screen: a search bar, a Continue watching card, a wide Media tile, nine smaller tiles from Games to Settings, the phone-pairing QR code, and the controller hints along the bottom">
+  <img src="screenshots/home.png" alt="The JukaHub Home screen: a search bar, a Continue watching card, a wide Media tile, smaller tiles from Games to Settings, the phone-pairing QR code, and the controller hints along the bottom">
 </p>
 
-**Your TrimUI handheld as a complete media and gaming console: one folder on
-the SD card, the stock OS untouched underneath.**
+## What is JukaHub?
 
-A media hub for the **TrimUI Smart Pro** — and the whole TrimUI line — with no
-firmware swap and nothing to replace. **The shell your handheld should have
-shipped with**: YouTube on the couch, your ROM library with box art and
-save-resume, PS4/PS5 Remote Play anywhere your Wi-Fi reaches, LAN play in the
-same room, a phone as your keyboard — every screen driven by the D-pad you already have.
-It is one folder on the card, so installing it is always reversible.
+JukaHub is one controller-first app that sits on top of the firmware, not
+instead of it. It is a media player, a game library, a remote-play client and a
+toolbox in a single folder on the card, and the stock launcher is one
+Select+Start hold away whenever you want it back.
 
-Updates are signed and roll themselves back if a new build misbehaves, and
-nothing is uploaded anywhere unless you switch it on. Ten minutes from download
-to all of that: the walkthrough is [docs/TOUR.md](docs/TOUR.md).
+- **Runs on** — TrimUI Smart Pro, Smart Pro S, Brick, Brick Pro and Hammer,
+  plus a Windows PC if you want to try it out.
+- **Installed as** — one folder, `Apps/JukaHub`, on the SD card.
+- **Changes to the firmware** — none. Uninstall by deleting the folder.
+- **Needs on the device** — nothing extra: no Python, no build tools, no SDL2
+  download (the firmware already ships it).
+- **Needs once** — Wi-Fi on the first start, to fetch its two helper tools.
+- **Updates** — in-app, signed and checksum-checked; a bad build rolls back.
 
-[Download](https://github.com/jukaLang/JukaHubV2/releases/latest) ·
-[Web builder](https://generate.jukalang.com) ·
-[Discord](https://discord.gg/R9qgJjh5jG) ·
-[Controls](docs/CONTROLS.md) ·
-[Developer guide](docs/DEVELOPMENT.md) ·
-[Dependencies](docs/DEPENDENCIES.md)
+> **The name.** JukaHub is not a Juka program and needs no Juka runtime — the
+> launcher is Go + SDL2, the one runtime the firmware already ships. What it
+> shares with the rest of the family is the data layer: every screen is a
+> `jukaconfig.json`, authored in the [web builder](https://generate.jukalang.com)
+> and loaded by the player. See
+> [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and
+> [jukalang.com](https://jukalang.com).
 
-## Contents
+## Put it on your handheld
 
-**What it is** — [What it does](#one-app-the-whole-card) ·
-[JukaHub and Juka](#jukahub-and-juka) · [Why JukaHub](#why-jukahub)
+Five steps, about five minutes, no firmware swap. It works on the stock OS and
+on CrossMix.
 
-**Install and set up** — [Install](#install-on-a-trimui-smart-pro) ·
-[First run](#first-run) · [Controls](#controls) ·
-[Copy files from your PC](#copy-files-from-your-pc) ·
-[SFTP](#browse-files-over-sftp) ·
-[Phone as a keyboard](#use-your-phone-as-a-keyboard) ·
-[Screen Share](#share-the-screen-on-a-tv-screen-share) · [Updating](#updating) ·
-[Privacy](#privacy)
+**You need:** the handheld, its SD card, a computer with an SD card reader, and
+Wi-Fi for the first start.
 
-**When something goes wrong** — [Something is wrong?](#something-is-wrong) ·
-[Other devices](#other-devices)
+<p align="center">
+  <img src="docs/assets/install-steps.svg" width="1000" alt="Install in four steps: download JukaHub-Trimui.zip from Releases, unzip it to get one folder, drag that folder into Apps on the SD card, then power on and open Apps then JukaHub">
+</p>
 
-**Reference and contributing** — [Security](#security) · [Toolbox](#toolbox) ·
-[Web builder](#build-a-screen-in-the-web-builder) ·
-[Share and remix a design](#share-and-remix-a-design) ·
-[Contributing](#contributing) · [Documentation](#documentation)
+1. **Download `JukaHub-Trimui.zip`** from
+   [Releases](https://github.com/jukaLang/JukaHubV2/releases/latest).
+2. **Turn the handheld off** and put its SD card in your computer.
+3. **Unzip the download.** It contains one folder, `JukaHub-Trimui`.
+4. **Drag that folder into the card's `Apps` folder.** Renaming it to `JukaHub`
+   is optional — the app runs from either name, and the Apps menu takes its
+   label from `config.json`.
+5. **Put the card back, power on, open Apps → JukaHub.**
 
----
+That is the whole installation. Keep the folder whole: `launch.sh` and the
+`JukaHub` program must sit **directly inside** it, not one level deeper. If
+JukaHub does not appear in **Apps**, reboot — the stock launcher only scans
+`Apps/` at boot — and check the folder name and contents again.
 
-## One app, the whole card
+**On the first start** JukaHub downloads `yt-dlp` and `ffmpeg` into the folder
+(a minute or two, once ever; it needs Wi-Fi). Later starts are instant, and
+everything works offline after that except the things that need the network,
+like YouTube and weather.
 
-JukaHub is one controller-first app for the whole card, running *on top of* the
-firmware — not instead of it. Install, uninstall, repeat: it is a folder on the
-SD card, and the stock launcher is one Select+Start hold away whenever you want
-it back.
+### On the device
 
-* **Watch** — YouTube search and trending, Shorts, saved favourites, podcasts
-  with a subscription library, IPTV playlists, a local video player with
-  subtitles, an EPUB/PDF reader, and a text web browser.
-* **Play** — a console-by-console ROM library with box art, per-game launchers,
-  play time, RetroAchievements progress, save-state auto-resume and LAN play
-  (RetroArch netplay, hosted or joined from the library).
-* **Keep** — save-folder snapshots with one-tap restore, SD-card health checks,
-  battery health, and a Continue list built from what you actually used.
-* **Connect** — a LAN watch party, PS4/PS5 Remote Play, sharing the screen —
-  games too — to a browser on a TV or laptop, typing from a phone, and SFTP/FTP
-  plus SSH file access.
-* **Make it yours** — themes, animated GIF wallpapers, a liquid background that
-  ripples as you move and the browser design builder, plus accessibility
-  settings: text scaling, high-contrast and colour-blind palettes, button swaps
-  and a one-handed chord.
-* **Talk to it** — press Menu (F4 on a keyboard) and a glowing orb listens:
-  say "open YouTube" or "volume 50", or ask Juka a question. It listens
-  through the handheld's microphone or your phone's keyboard.
-* **Hear it around you** — spatial audio places videos and music (and RetroArch
-  games, through a filter JukaHub ships) around you on headphones, or widens the
-  speakers.
-* **Try native Android apps and games** — the APK Store reads APKs on the card,
-  browses F-Droid's signed app list, downloads verified APKs, and adds native
-  candidates to Games through AndroidRT. Penguin Dash has been played on a
-  Smart Pro; other titles need individual testing. Java apps stay available
-  for inspection but need Android to run.
-* **Extend** — signed packages from a repository with rollback, and plugins.
-
-Most of these have a page in the [documentation table](#documentation) below.
+These two are not renders: they were captured from the screen of a real
+TrimUI Smart Pro, with the handheld's own status row on top.
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="screenshots/media.png" alt="The Media screen: video search, a row of tabs from For you to Podcasts, and Continue watching and Trending now rows of video thumbnails">
+      <img src="hardware-captures/smartpro-jukahub-live.jpg" alt="JukaHub running on a TrimUI Smart Pro: the JukaHub header with the Collections tab open, a New collection tile, Most played with GTA box art, Recently added and Never played, the device's temperature, Wi-Fi and battery in the top bar, and the button hints along the bottom">
       <br>
-      <b>Media</b> — YouTube with Continue watching and Trending rows;
-      Shorts, Downloads, History, Favorites, Library, Live TV and Podcasts are
-      tabs on the same screen.
+      <b>Running on the handheld</b> — the Collections tab on a Smart Pro, with
+      the device's temperature, Wi-Fi and battery in the top bar and the
+      controller hints in the footer.
     </td>
     <td width="50%" valign="top">
-      <img src="screenshots/ambient.png" alt="The dock display: a large clock with the date and the next alarm under it, a Wi-Fi chip, and button hints for play, previous, next, sleep timer, screen off and exit">
+      <img src="hardware-captures/hw1-20261117-mainui-after-exit.jpg" alt="The stock TrimUI menu after quitting JukaHub: the TRIMUI header, a Recent list showing ftp and JukaHub with its icon, and the A OK, MENU and Search hints along the bottom">
       <br>
-      <b>Dock &amp; ambient</b> — the clock that takes over while charging or
-      idle, with the next alarm, today's weather and new chat messages, and
-      play, skip, a sleep timer and screen-off on the buttons.
+      <b>And out again</b> — after <b>Select + Start</b> the stock TrimUI menu
+      comes back, with JukaHub still one press away in its list.
     </td>
   </tr>
 </table>
 
-## JukaHub and Juka
+### What the card looks like
 
-The name is deliberate, and the relationship is easy to misread: **JukaHub is not
-a Juka program, and the device needs no Juka runtime to run it.** The launcher is
-Go + SDL2 — the one runtime the firmware already ships — because that is what a
-handheld with no Python, no build tools and 1 GB of RAM can actually run well.
-
-What it shares with the ecosystem is the data layer: every screen is a
-`jukaconfig.json`, authored in the [web builder](https://generate.jukalang.com)
-and loaded by the player, so a design moves between the browser and the card
-without a rebuild or a recompile. The language itself, its packages and the rest
-of the family live at [jukalang.com](https://jukalang.com) and
-[github.com/jukaLang](https://github.com/jukaLang); this repository is the
-handheld end of it, and the format both halves agree on is documented in
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-
-## Why JukaHub
-
-Four things separate it from the other TrimUI frontends, and each one has a page
-because it is a design decision rather than a feature bullet.
-
-* **The interface is data.** Every screen is `jukaconfig.json` — elements,
-  bounds, triggers and theme tokens — so a layout can be changed without
-  touching Go. The [web builder](https://generate.jukalang.com) edits the same
-  file the device reads; see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-* **Updates work like a package manager.** A signed repository, staged
-  installs, SHA-256 *and* Ed25519 verification, a rollback copy and an
-  interrupted-install recovery — not "download the zip and hope". See
-  [docs/PACKAGES.md](docs/PACKAGES.md) and [Updating](#updating).
-* **A fast, honest test suite.** The Go tests guard what would hurt users
-  silently — saved data, config migration, security checks, the updater and the
-  package installer — and run in seconds, so they get run. Visual changes are
-  checked on screen, on Windows and then on the device.
-* **Breadth without a second app.** Watch party, PS4/PS5 streaming, the video
-  and music players, FTP/SFTP, plugins, the accessibility panel and opt-in
-  telemetry all ship in the same folder, on top of the stock firmware.
-
-What is still missing, and what deliberately cannot work on this hardware, is
-listed honestly in the [engineering backlog](player/MODERNIZATION.md).
-
-## Install on a TrimUI Smart Pro
-
-Five steps, no firmware swap, works on the stock OS and on CrossMix. You need
-the handheld, its SD card, and Wi-Fi.
-
-1. Download **`JukaHub-Trimui.zip`** from
-   [Releases](https://github.com/jukaLang/JukaHubV2/releases/latest).
-2. Turn the device off and put the SD card in your computer.
-3. On the card, open the **`Apps`** folder and create a folder named
-   **`JukaHub`** inside it.
-4. Extract **all files** from the download into `Apps/JukaHub`.
-5. Put the card back in, power on, and open **Apps → JukaHub**.
-
-When you are done the folder looks like this:
+<p align="center">
+  <img src="docs/assets/sd-card-layout.svg" width="1000" alt="The SD card with a new Apps/JukaHub folder holding the program, launch.sh, config.json, jukaconfig.json, jukauser.json, the font, the icon, the wallpaper, the required helpers and the data folder; Roms, BIOS, Saves and System are untouched">
+</p>
 
 ```text
 SDCARD/Apps/JukaHub/
@@ -178,520 +122,306 @@ SDCARD/Apps/JukaHub/
 ├── jukaconfig.json    <- the interface
 ├── JukaPlayer.png     <- the icon in the Apps menu
 ├── Inter-Regular.ttf
-└── background.jpg
+├── background.jpg
+├── jukauser.json      <- your settings (written on first run)
+├── required/          <- yt-dlp and ffmpeg, fetched once
+└── data/              <- saves, snapshots, caches
 ```
 
-That's the whole installation. There is nothing else to set up:
+Games, BIOS files, saves and media are **not** part of the install: they stay
+in the card's existing `Roms/`, `BIOS/`, `Saves/` and media folders, and
+JukaHub reads them where they are.
 
-* the firmware already ships SDL2, so there are no extra libraries,
-* no Python and no build tools are needed on the device,
-* `yt-dlp` and `ffmpeg` download themselves on first launch (needs Wi-Fi; the
-  first start takes a minute or two, later starts are instant).
+### Which download?
 
-If JukaHub does not appear in **Apps**, reboot the device — the stock launcher
-only scans `Apps/` at boot. Also check that the folder is exactly
-`Apps/JukaHub` and that `launch.sh` is inside it.
+| You want | File |
+|---|---|
+| JukaHub as an app in the Apps menu (the normal choice) | `JukaHub-Trimui.zip` |
+| The handheld to power on **into** JukaHub, stock system untouched underneath | `JukaHub-OS-Trimui.zip` |
+| To try JukaHub on a Windows PC | `JukaHub-Windows.zip` |
 
-**Want JukaHub as the handheld's OS?** Download **`JukaHub-OS-Trimui.zip`**
-instead and extract it to the **root** of the card (merge the `Apps` and
-`System` folders). The handheld then powers on straight into
-[JukaHub OS](docs/JUKAHUB_OS.md); the stock system is never replaced, holding
-**Select** while the logo boots gives the stock menu once, and Settings →
-JukaHub OS → **Boot into JukaHub OS** off makes it an app again.
+The same TrimUI download runs on the whole line — Smart Pro, Smart Pro S,
+Brick, Brick Pro and Hammer. JukaHub detects the panel and picks its canvas:
+1280×720 on the Smart Pro family, a compact 960×720 canvas scaled to the
+1024×768 4:3 screens on the Bricks and the Hammer.
 
-Separate standalone SD card images, with JukaHub as the whole shell, are under
-development: a [plastron-based one for the Brick](os/plastron/README.md) and
-[one for the Smart Pro](os/smartpro/README.md) that boots the device's own
-kernel, copied from it. Neither has been boot-tested on hardware yet.
+**JukaHub as the OS:** download `JukaHub-OS-Trimui.zip` instead and extract it
+to the **root** of the card, merging the `Apps` and `System` folders. The
+handheld then powers on straight into JukaHub OS; the stock system is never
+replaced, holding **Select** through the logo gives the stock menu once, and
+**Settings → JukaHub OS → Boot into JukaHub OS** off turns it back into an app.
+Details: [docs/JUKAHUB_OS.md](docs/JUKAHUB_OS.md).
 
-> **Here to build it, not just use it?** Clone to a running build in about five
-> minutes with [docs/QUICK_START.md](docs/QUICK_START.md), pick up work labelled
-> [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue),
-> and read [Contributing](#contributing) for the rules that keep the suite green.
+## First five minutes
 
-## First run
-
-Home is a grid of tiles: **Continue**, **Media**, **Games**, **Packages**,
-**Apps**, **Favorites**, **Browser**, **Chat**, **Tools**, **Files**,
-**Settings**, plus **Exit** in the footer, under a search bar (**Y**) for apps,
-settings, files and the web. The PS4/PS5 launcher tiles and the
-phone-pairing QR sit just under the top bar on the right; the weather chip, the
-clock and the notification bell are in the bar itself.
-
-* **Media / Tube** — YouTube search and trending.
-* **Music** — open any audio file from the browser and the player takes its
-  folder: shuffle that visits each track once, repeat off/all/one, a play-next
-  queue, favorites that survive a restart, 0.75×–2× speed, a sleep timer,
-  synced `.lrc` lyrics and a full-screen spectrum. Playback continues while you
-  browse; see [docs/MUSIC_PLAYER.md](docs/MUSIC_PLAYER.md) for the feature map
-  and roadmap.
-* **Offline music** — **Start → Tools → Downloads** saves a link as an m4a on
-  the card:
-  a queue with live progress and speed, pause/resume, per-row retry and the SD
-  card's own usage bar. Saved tracks open in the audio player, so a downloaded
-  album plays with Wi-Fi off; see [docs/CONTROLS.md](docs/CONTROLS.md#downloads).
-* **Photos** — open PNG, JPG, BMP and WebP images from the file browser, then
-  browse the folder with Left/Right and zoom with Up/Down. WebP box art decodes
-  natively on the handheld, whose SDL_image links libwebp; a desktop runtime that
-  ships an SDL2_image without libwebp detects that at startup and skips WebP
-  files instead of showing a broken picture.
-* **Dock & ambient** — while charging (after 45 quiet seconds) or idle, the
-  screen becomes a dock display: a large clock, today's weather, the track that
-  is playing and a slideshow from your Photos folder. Y arms a sleep timer, X
-  blanks the panel while audio keeps playing, and an alarm wakes it. Open it by
-  hand from **Start → Ambient**; see [docs/AMBIENT.md](docs/AMBIENT.md).
-* **Favorites** — save links and reopen them later.
-* **Apps** — a tile launcher for the other apps on the card, plus built-in
-  extras (JukaLand, Weather, and **Browser**, a text web browser with GitHub
-  issue quick links; see [docs/BROWSER.md](docs/BROWSER.md)). Every installed
-  app is drawn with its own icon — the `icon.png`/`config.json` art of an app
-  folder, an image stored next to the program, or the icon Windows reports for
-  a shortcut — and falls back to a coloured initial when it has none.
-* **Wi-Fi** — a first-party network picker: scan, join with the on-screen
-  keyboard, reconnect saved networks without retyping the password, disconnect
-  and forget. Open it from **Quick Settings → Wi-Fi Networks** or **Hardware →
-  Wi-Fi**; see [docs/WIFI.md](docs/WIFI.md).
-* **Settings** — playback resolution, weather and 47 colour themes
-  (Dark, Light, High Contrast, Anime, Cute, Girly, Fallout, Matrix and more).
-  **Theme & look** also holds the wallpaper — a GIF plays, unless
-  **Animate wallpaper** is off or Battery Saver is on — and **Liquid
-  background**, which turns the backdrop under the glass into water that
-  ripples where the focus lands and stirs with the sticks.
-  **Smart Widgets** (from General) holds the settings that react to the device
-  on their own: battery saver, which drops to the slowest cadence, stops UI
-  motion and switches to the OLED theme below 20% until it is charged again;
-  light & dark by time of day (a day theme and a night theme that switch at
-  times you choose, also under Theme & look); and start at login, which a
-  TrimUI switches on at its first start and a desktop leaves off. A start with
-  the device plays a full boot — the logo comes alive and Home builds itself
-  card by card — and **General → Boot logo** puts the JukaHub logo into the
-  firmware's own power-on screen, and **General → Silent boot** has the
-  firmware's bootloader start Linux without printing every message to an
-  unused serial port, which the stock kernel waits for at power-on
-  ([docs/BOOT.md](docs/BOOT.md)).
-
-  ![Settings on Display & theme: theme presets, experience pack, community themes, wallpaper, text size and high contrast](screenshots/settings.png)
-* **Game Profiles** — launch Windows games through Box64/Wine, native
-  binaries and scripts. Profiles live in `Apps/JukaHub/data/game-profiles`;
-  see [docs/GAME_PROFILES.md](docs/GAME_PROFILES.md) for the format and the
-  import/export workflow.
-* **Smart Pro Compatibility** — per-game community reports, an honest
-  hardware tier when nobody has reported a title yet, one-press boost plans for
-  N64/Dreamcast/PSP, and a manager for multiple libretro core builds. The
-  **Emulators** page offers every core in the ARM64 buildbot index for a
-  one-press download. **U** (or **L1**) on the Core-builds tab pools newer
-  builds of installed cores, checksum-checked and checked to
-  load on this firmware; the daily **Emulator updates** pass installs them by
-  itself (keeping the replaced build for a one-press roll back) unless set to
-  Notify me or Off, and keeps JukaHub's own PPSSPP, hakuX and the downloaded
-  runtimes current the same way — on a PC, the emulators JukaHub installed and
-  its RetroArch's cores. Reports
-  and core pools live in `Apps/JukaHub/data/performance`; see
-  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
-* **Windows Apps** — scan for `.exe` files and launch basic Windows programs
-  through Wine. On TrimUI's no-X11 firmware WestonPack presents the display
-  through the firmware's SDL2, giving Wine a display on the handheld. If DXVK is
-  installed beside Wine and a Vulkan loader is present, Direct3D DLL overrides
-  are enabled automatically; see [docs/WINDOWS_APPS.md](docs/WINDOWS_APPS.md)
-  for the runtime setup.
-* **Games Library** — **Emulators → Games Library** browses `Roms/<system>/`
-  console by console, plus Android games and local HTML5 games. The HTML5 row
-  includes three open source demos and plays compatible `Games/HTML5/` folders in
-  JukaHub's own game browser on TrimUI. The library shows box art and launches
-  ROMs with the emulator that owns each system. Drop a short clip in
-  `data/game-snaps/` and the preview box plays it while the focus rests on that
-  game. Every launch is recorded, so
-  the **Continue** row at the top resumes the last game in one press. **X** on an
-  emulator game opens **Netplay**: host it, join a room another JukaHub is hosting on
-  your Wi-Fi, or play online through RetroArch's lobby and relays, so link
-  cable titles like Mario Kart and Four Swords play without a cable. **Tools →
-  Disc helpers** fills in the cue sheets and multi-disc playlists that
-  PlayStation and Sega CD rips need, without touching an existing file. See
-  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md).
-* **PortMaster Ports** — browse PortMaster's live catalogue, filter for ports
-  that may run on this handheld, and press A to install one through PortMaster
-  with its declared runtimes. Installed launchers are also available here; see
-  [docs/PORTMASTER.md](docs/PORTMASTER.md).
-* **RomM server** — connect to your own server under Tools, browse and download
-  games with their covers, fetch BIOS files, and sync RetroArch saves for an
-  installed game. See [docs/ROMM_SERVER.md](docs/ROMM_SERVER.md).
-* **Save Manager** — snapshot every emulator save folder into a versioned copy,
-  restore one with a safety snapshot first, prepare the folders for Syncthing
-  and export a phone resume bundle. Snapshots are plain files on the card, so
-  they work without JukaHub; see [docs/SAVE_MANAGER.md](docs/SAVE_MANAGER.md).
-* **Curation Hub** — a device-specific layer over the Store: an essentials
-  checklist for a new card, shareable theme + text-size profiles tuned per
-  panel, and compatibility votes for games and PortMaster titles. It works
-  offline; see [docs/CURATION.md](docs/CURATION.md).
-* **Accessibility** — global text scaling (85–145%), a high-contrast palette,
-  three colour-blind-safe palettes and a system-wide A/B / X/Y controller
-  remap, all from one panel in the Start menu; see
-  [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md).
-* **PS Remote Play** — JukaHub's own PS4/PS5 client, with no Python launcher
-  and no dependency on a separate Chiaki-ng install. It scans the LAN, pairs
-  over the LAN (**Link Device** PIN; PS5 also needs the PSN Account-ID),
-  remembers consoles and quality, and streams through the bundled
-  `chiaki-stream` native helper. PS4 pairing is pure Go, so a PS4 works even
-  before the helper is present. **PS4** and **PS5** tiles in the home header,
-  left of the phone-pairing QR, open the panel in one press and are reachable
-  with the D-pad (`Up` from the card beneath them) and **A**. JukaHub hands the
-  screen to the helper and closes while it runs; the stock menu returns when the
-  stream ends. See [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
-* **Smart home** — the **Smart Home** tab of the Home screen switches TP-Link
-  Kasa and Tapo plugs, strips and lights (locally, no TP-Link cloud), controls
-  Google's Nest speakers, displays, Chromecast and Google TV (no account), and
-  everything Home Assistant has — Apple Home and Google Home accessories too,
-  shared to it through Matter. **Add devices** sets it all up on the handheld
-  or from the phone. **Start → Smart Home** also shows the Pi-hole, router and
-  Tailscale state, connects or disconnects the tunnel and mirrors Home
-  Assistant toggles to MQTT; WireGuard is status-only because `wg-quick` needs
-  root. See [docs/SMART_HOME.md](docs/SMART_HOME.md).
-* **Logs** — view or export the app log if something misbehaves.
-* **Tools** — this device's IP address, a built-in FTP server for quick file
-  drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC
-  (also under **Tools → FTP & IP**), the phone companion that turns a phone
-  into a keyboard, remote and file drop, **Screen Share** to show the screen,
-  games too, live in a browser on a TV or laptop, and **Community & support** for the
-  changelog, bug reports and the anonymous-diagnostics switch. **Power tools**
-  adds a gateway or clipboard-host port scan, ping/traceroute, DNS and Wi-Fi
-  checks, a hex/JSON/log viewer, clipboard-saved script buttons, rsync and Syncthing checks,
-  jukauser.json snapshots with diff/rollback, and a read/write benchmark
-  board.
-
-Turn Wi-Fi on in Quick Settings, then join a network from **Quick Settings →
-Wi-Fi Networks** before using YouTube or weather. Your settings are stored in
-`Apps/JukaHub/jukauser.json` and survive updates.
+1. **Join Wi-Fi.** Hold **Select** for Quick Settings → **Wi-Fi Networks**, or
+   open **Start → Wi-Fi**. Search, weather and updates need it.
+2. **Point your phone at the QR code** in Home's top-right corner (**Start →
+   Tools → Phone companion** shows it in full). The phone becomes your
+   keyboard, a remote, and a drop target for games, covers and music.
+3. **Add games** by dropping them on the phone page, over FTP (below), or
+   straight onto the card. **Games** → a console shows them with box art;
+   **Continue** on Home resumes the last one you played.
+4. **Watch something.** **Media → Tube** is YouTube, **Downloads** keeps videos
+   for offline, and **Live TV**, **Podcasts** and **Library** are tabs on the
+   same screen.
+5. **Leave the way you like.** **B** goes back, **Start** opens the menu, and
+   holding **Select + Start** saves, cleans up and returns to the stock
+   launcher — from any screen.
 
 ## Controls
 
-D-pad moves, **A** confirms, **B** goes back, **X** and **Y** are the secondary
-and tertiary actions, **L1/R1** move between sections and pages, **Start** opens
-the Start menu — scenes in one group, games, tools and device actions in the
-others, so switching screen or taking a screenshot is two presses away.
+<p align="center">
+  <img src="docs/assets/controls.svg" width="960" alt="Control cheat sheet: D-pad moves, A opens, B is back, X and Y are the second and third actions, L1 and R1 change section or page, Start opens the menu, holding Select opens Quick Settings, Select plus Start quits, Menu opens the voice orb">
+</p>
 
-To open **Quick Settings** (Wi-Fi, Bluetooth, volume, brightness, LED lights,
-Close all apps and more), hold **Select**. Press **Select** or **B** to close it.
+| Button | What it does |
+|---|---|
+| **D-pad** | Move and choose |
+| **A / B** | Open / back |
+| **X / Y** | The screen's second and third actions |
+| **L1 / R1** | Previous and next section or page |
+| **Start** | The Start menu: scenes, games, tools, device actions |
+| **Select** (hold) | Quick Settings: Wi-Fi, Bluetooth, volume, brightness, LED lights, Close all apps |
+| **Select + Start** | Quit to the stock launcher |
+| **Menu** (F4) | The voice orb: say "open YouTube", "volume 50", or ask a question |
+| **F1** (keyboard) | The full button list as an overlay |
 
-To leave the app, hold **Select + Start** together. JukaHub saves, shows a
-teardown card while it stops games, servers and caches, then returns to the
-stock launcher — this works from any screen, including while a video is playing
-or a panel is open.
+Screens that add their own buttons show them in the footer. Here are two real
+screens (not diagrams) with their own button rows:
 
-Press **F1** on a desktop build for the full list as an in-app overlay. Per-screen
-tables (Live TV, video player, on-screen keyboard, music player, Pomodoro,
-alarm, calculator, terminal, JukaLand, desktop keys) are in
-**[docs/CONTROLS.md](docs/CONTROLS.md)**.
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="screenshots/wifi-picker.png" alt="The Wi-Fi panel: connected to HomeNet at 192.168.1.20, a list of networks with CONNECTED, SAVED and SECURE states, and a footer reading A join, X disconnect, Y rescan, SELECT forget, B close">
+      <br>
+      <b>Wi-Fi</b> — scan, join with the on-screen keyboard, and forget; the
+      footer carries that panel's own buttons.
+    </td>
+    <td width="50%" valign="top">
+      <img src="screenshots/psremote-panel.png" alt="The PS Remote Play panel: a paired Living Room PS5 ready to stream, a Bedroom PS4 and a Studio PS5 waiting to be paired, rows to scan for consoles and add one by address, the PSN Account-ID row, and A select, Y forget, B close in the footer">
+      <br>
+      <b>PS Remote Play</b> — consoles it found, which are paired, and one
+      press to stream; the footer is that panel's own.
+    </td>
+  </tr>
+</table>
 
-## Copy files from your PC
+Per-screen tables (Live TV, video and music players, the on-screen keyboard,
+terminal, JukaLand, desktop keys) are in **[docs/CONTROLS.md](docs/CONTROLS.md)**.
 
-1. Connect the handheld to the same Wi-Fi as your PC.
-2. Open **Tools** and note the **IP address** (press A to copy it).
-3. Start the **FTP server** (**Tools → Network tools**). The panel shows the
-   address to type, such as `ftp://192.168.1.42:2121`, the user name `juka`
-   and a password made up for this start.
-4. On your PC, paste that address into Explorer/Finder (or any FTP client),
-   sign in, and drop files into one of the folders it shows: `Roms`, `BIOS`,
-   `Saves`, your media folders and JukaHub's downloads. The rest of the card —
-   the apps, emulator scripts and system files — is not shared (on Windows the
-   share is a `shared` folder next to the app, so your settings and saved
-   logins are never exposed). `Roms/Ports` and the folders of game profiles
-   hold programs the device runs, so FTP can read them but not change them;
-   use SFTP for those.
+## What it can do
 
-A wrong password costs a pause, three end the connection, and ten from one
-address lock it out for ten minutes. FTP is not encrypted, so on a network you
-do not trust use SFTP below. Both servers switch themselves off after 15
-minutes nobody uses them, and when the handheld joins another network; the
-panel lists who is connected while they run.
+### Watch
 
-## Browse files over SFTP
+- **YouTube** — search, trending, Shorts, saved favourites, history, downloads
+  and a Continue row, all from the thumb-friendly **Media** screen.
+- **Music** — open any audio file and the player takes its folder: shuffle,
+  repeat, a play-next queue, favourites that survive restarts, 0.75×–2× speed,
+  a sleep timer, synced `.lrc` lyrics and a full-screen spectrum. Playback
+  continues while you browse; the feature map is in
+  [docs/MUSIC_PLAYER.md](docs/MUSIC_PLAYER.md).
+- **Offline music** — **Start → Tools → Downloads** saves a link as an m4a with
+  progress, speed, pause/resume and per-row retry, then plays it with Wi-Fi off.
+- **Podcasts, Live TV and IPTV** — a subscription library, IPTV playlists, and
+  live channels that also work on a TV through Screen Share.
+- **Books, PDFs and photos** — the EPUB/PDF reader, the image viewer (PNG, JPG,
+  BMP, WebP, with folder browsing and zoom) and a text web browser.
 
-For `scp`, backup scripts and editors, **Tools → SSH / SFTP** starts a server
-that only speaks SFTP. The panel shows an address such as
-`sftp://juka@192.168.1.42:2222` and a one-time password for the `juka` account;
-connect with WinSCP, FileZilla, Cyberduck, Finder or the `sftp` command line.
-(Windows Explorer only speaks FTP, so use the server above or install an SFTP
-client.)
+### Play
 
-Unlike FTP this is encrypted: the password is random and regenerated every
-start, guesses are limited, and shell commands, port forwarding and tunnels are
-refused. It shares the SD card (your home folder on a computer); the whole file
-system only after **Share whole system…** on its panel is pressed twice, for
-that run of JukaHub. Paths cannot escape the root, including through symlinks,
-and the host key is saved once in the app data folder. On the handheld the
-SFTP tile opens its panel first (that is where **Share whole system…** is);
-press **Start** there. Press **A** on the row (or run `ssh off`) to stop it.
+- **Games Library** — `Roms/<system>/` console by console, with box art, play
+  time, per-game launchers, a **Continue** row that resumes in one press, and a
+  preview clip when you rest on a game. **X** opens **Netplay** (host, join a
+  room on your Wi-Fi, or play online), so link-cable titles work without a
+  cable. [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md)
+- **Emulators** — one-press downloads of libretro cores, per-game compatibility
+  reports and honest hardware tiers, boost plans for N64/Dreamcast/PSP, and a
+  daily update pass that keeps cores and runtimes current (with a one-press
+  roll back). [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+- **PS4/PS5 Remote Play** — JukaHub's own client, no Python, no separate Chiaki
+  install. Scan the LAN, pair with the PIN, remember consoles and quality, and
+  stream from the **PS4**/**PS5** tiles in Home's header.
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md)
+- **PortMaster ports, Windows apps, Android apps and homebrew** — PortMaster's
+  catalogue, Wine through the firmware's own SDL2 (with Box64), the APK Store
+  and AndroidRT for native Android games, itch.io homebrew, CHIP-8, WASM-4 and
+  HTML5 demos. [docs/PORTMASTER.md](docs/PORTMASTER.md) ·
+  [docs/WINDOWS_APPS.md](docs/WINDOWS_APPS.md) ·
+  [docs/ANDROID.md](docs/ANDROID.md)
+- **RomM server, NAS games and game profiles** — browse and download from your
+  own RomM library, play from a network drive, and launch Windows games or
+  scripts through profiles. [docs/ROMM_SERVER.md](docs/ROMM_SERVER.md) ·
+  [docs/NETWORK_DRIVE.md](docs/NETWORK_DRIVE.md) ·
+  [docs/GAME_PROFILES.md](docs/GAME_PROFILES.md)
 
-The password is shown on the device only and is never written to
-`jukauser.json` or the log. For unattended access, put your public key in
-`Apps/JukaHub/data/ssh_authorized_keys` (OpenSSH format). Advanced settings:
+### Keep
+
+- **Save Manager** snapshots every emulator save folder into a versioned copy
+  and restores one with a safety snapshot first. Snapshots are plain files, so
+  they work without JukaHub. [docs/SAVE_MANAGER.md](docs/SAVE_MANAGER.md)
+- **Save sync** — one QR code sets up Google Drive, WebDAV, RomM, Syncthing or
+  a second handheld, and saves follow you around games by themselves.
+  [docs/SYNC.md](docs/SYNC.md)
+- **Card and battery health** — SD-card checks (including the fake-capacity
+  test), battery health, and a **Continue** list built from what you actually
+  used. [docs/CARD_CHECK.md](docs/CARD_CHECK.md)
+
+### Connect
+
+- **Phone companion** — the QR code on Home. Type on a real keyboard, use the
+  D-pad as a remote, send links, drop files (they are sorted into the right
+  folders for you) and send whole folders.
+- **Screen Share** — the handheld's screen, games included, live in a browser
+  on a TV or laptop, with sound and optional controller input.
+- **Files over the network** — FTP for quick drops, SFTP/SSH for real file
+  management, USB (MTP) over a cable, and WebDAV/SMB shares that appear as a
+  drive. [docs/USB_FILE_TRANSFER.md](docs/USB_FILE_TRANSFER.md) ·
+  [docs/NETWORK_SHARE.md](docs/NETWORK_SHARE.md)
+- **Watch party, Chat and voice** — a LAN watch party, chat with files and
+  clips, and a free voice room phones can join.
+- **Smart home** — TP-Link Kasa/Tapo plugs and lights, Google Cast and Nest,
+  Home Assistant (Apple Home and Google Home through Matter), plus Pi-hole,
+  Tailscale and WireGuard status. [docs/SMART_HOME.md](docs/SMART_HOME.md)
+- **Voice** — press **Menu** and say what you want, through the handheld's
+  microphone or your phone. [docs/VOICE.md](docs/VOICE.md)
+
+### Make it yours
+
+- **47 themes**, animated GIF wallpapers, a **liquid background** that ripples
+  where the focus lands, font scaling and high-contrast or colour-blind-safe
+  palettes. [docs/THEMES.md](docs/THEMES.md) ·
+  [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md)
+- **Smart Widgets** — battery saver (slower cadence, less motion, an OLED theme
+  below 20%), light/dark themes that switch at times you pick, and start at
+  login. [docs/AMBIENT.md](docs/AMBIENT.md)
+- **The web builder** — the same layout file, edited visually in a browser, and
+  pushed to the device over Wi-Fi.
+- **Extend** — signed packages from a repository with rollback, plugins, and a
+  Toolbox that installs `rclone`, `jq`, `ripgrep`, `fd`, `pandoc` and `age` on
+  demand. [docs/PACKAGES.md](docs/PACKAGES.md) · [Toolbox](#toolbox)
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="screenshots/media.png" alt="The Media screen: video search, a row of tabs from For you to Podcasts, and Continue watching and Trending now rows of video thumbnails">
+      <br>
+      <b>Media</b> — YouTube with Continue watching and Trending; Shorts,
+      Downloads, History, Favorites, Library, Live TV and Podcasts are tabs on
+      the same screen.
+    </td>
+    <td width="50%" valign="top">
+      <img src="screenshots/ambient.png" alt="The dock display: a large clock with the date and the next alarm under it, a Wi-Fi chip, and button hints for play, previous, next, sleep timer, screen off and exit">
+      <br>
+      <b>Dock &amp; ambient</b> — the clock that takes over while charging or
+      idle, with the next alarm, today's weather and new messages, and play,
+      skip, a sleep timer and screen-off on the buttons.
+    </td>
+  </tr>
+</table>
+
+## Getting files in and out
+
+**FTP, from Windows Explorer or Finder.** Open **Tools**, note the IP address,
+and start the **FTP server** (**Tools → Network tools**). The panel shows the
+address to type, such as `ftp://192.168.1.42:2121`, plus a one-time user name
+and password. Drop files into `Roms`, `BIOS`, `Saves`, your media folders or
+JukaHub's downloads; the rest of the card is not shared (on Windows the share
+is a `shared` folder next to the app, so settings and saved logins are never
+exposed). A wrong password costs a pause, three end the connection and ten from
+one address lock it out. Both servers switch themselves off after 15 idle
+minutes and when the handheld joins another network.
+
+**SFTP/SSH, for editors, `scp` and backup scripts.** **Tools → SSH / SFTP**
+starts a server that only speaks SFTP at `sftp://juka@192.168.1.42:2222` with a
+one-time password, encrypted, with commands and tunnels refused. Connect with
+WinSCP, FileZilla, Cyberduck, Finder or `sftp`. The whole file system is shared
+only after **Share whole system…** is pressed twice. For unattended access, put
+your public key in `Apps/JukaHub/data/ssh_authorized_keys`.
 
 | Variable | Effect |
 |----------|--------|
 | `JUKAHUB_SSH_PORT` | Port to listen on (default `2222`), or set `ssh_port` in the config |
 | `JUKAHUB_SSH_ROOT` | Folder to expose instead of the SD card |
-| `JUKAHUB_SSH_FULL_ROOT=1` | Expose the whole file system on every start (Linux); or set `ssh_full_root` in the config |
-| `JUKAHUB_SSH_READONLY=1` | Refuse every upload, rename and delete; or set `ssh_readonly` in the config |
+| `JUKAHUB_SSH_FULL_ROOT=1` | Expose the whole file system on every start (Linux); or set `ssh_full_root` |
+| `JUKAHUB_SSH_READONLY=1` | Refuse every upload, rename and delete; or set `ssh_readonly` |
 | `JUKAHUB_COMPANION_PORT` | Port for the phone companion page (default `8317`) |
 
-## Use your phone as a keyboard
+**The phone page** does the same from a phone: **Files** browses and uploads,
+and **Send to the handheld** puts each dropped file where it belongs. Folders
+keep their structure, and a file already there is replaced only after you
+confirm.
 
-Typing a search on a D-pad is slow. **Tools → Phone companion** shows a QR
-code; scan it with your phone camera (phone and handheld on the same Wi-Fi) and
-the phone opens a small page with:
-
-* **The handheld's screen**, pinned at the top while everything below it
-  scrolls. It refreshes a moment after each press, text, link or upload;
-  **Live** keeps it moving and **Hide screen** folds it away.
-* **Type** — a text box whose contents appear in whichever field has focus,
-  with an optional Enter after each send.
-* **Remote** — D-pad, A/B/X/Y, Start, Back and the shoulder buttons.
-* **Send a link** — paste a YouTube, direct-video or stream link and it starts
-  playing on the handheld.
-* **Send to the handheld** — the big target at the top: drop files on it (or
-  anywhere on the page), or tap it to choose several on a phone, and each file
-  goes where it belongs (see *Drop anything* below), with its own progress.
-  Untick **Put each file where it belongs** to send everything to `PhoneDrop`.
-  **Send a folder** (or drop a folder on the page) sends a whole folder with
-  its structure kept — a book collection, an album, a disc game — with one
-  progress line and **Cancel** per folder.
-* **Files** — browse the shared folders, drag games, covers or music into the
-  open folder, upload and download files, and make or rename folders from a
-  phone or computer browser.
-* **Groq API key** — paste the key from console.groq.com instead of typing 56
-  characters on the handheld. It is checked with Groq, saved for voice typing,
-  voice commands and the Juka chat, and never shown again (the page only
-  learns its last four characters). Settings → General → **Groq API key** →
-  **Paste it from your phone** shows a code that opens the page straight at
-  this card, and closes itself when the key arrives.
-* **PlayStation Remote Play** — save the PSN Account-ID that pairing a PS5 (or
-  a PS4 on firmware 7 or newer) needs: paste it, the long account number, or
-  the address of Sony's *redirect* page, or tap **Sign in to get it** for
-  Sony's sign-in. The card also follows Remote Play's own download on the
-  handheld, with **Download now** when it is missing (the page only learns the
-  Account-ID's first and last characters).
-
-### Drop anything: where files go
-
-The handheld decides for each file, and the card shows where it went:
-
-| File | Goes to |
-|------|---------|
-| A game (`.gba`, `.sfc`, `.nes` …) | its console's folder in `Roms`: the one the Games library reads on this card (`Roms/GB` on the stock firmware and CrossMix, `Roms/Game Boy (GB)` on NextUI), else a new folder with the firmware's name |
-| A `.bin`, `.iso` or `.zip` | the same, once the handheld has read the file's first bytes or the zip's list of files; a PortMaster port waits in `PhoneDrop` (install it with PortMaster) |
-| A `.chd`, `.7z`, `.cue` or a file it cannot tell | the card asks which console it is for; a disc game's tracks, cue sheet and playlist follow the first answer |
-| A picture named after a game (`Pokemon Red.png`, `Pokemon Red (USA).jpg`) | that game's cover, beside it in `Imgs` (`.media` on NextUI); a name that fits no game offers the closest titles |
-| Music and videos | the card's `Music` and `Videos` folders the media library reads (JukaHub's own music and video folders on a PC) |
-| A BIOS file the BIOS doctor knows (`scph5501.bin`, `gba_bios.bin` …) | `BIOS` |
+| What you drop | Where it goes |
+|---|---|
+| A game (`.gba`, `.sfc`, `.nes` …) | its console's folder in `Roms` (the one this card's Games library reads) |
+| A `.bin`, `.iso` or `.zip` | the same, once it has read the file's first bytes or the zip's list |
+| A `.chd`, `.7z`, `.cue` or a file it cannot tell | it asks which console it is for |
+| A picture named after a game (`Pokemon Red.png`) | that game's cover, beside it |
+| Music and videos | the `Music` and `Videos` folders the media library reads |
+| A BIOS file it knows (`scph5501.bin`, `gba_bios.bin` …) | `BIOS` |
+| A folder of books, an album, a disc game | `Books/<Folder>`, `Music/<Folder>`, `Roms/<console>/<Folder>` |
 | Anything else | `PhoneDrop` |
 
-A file of the same name is replaced only after you confirm. When the last
-file is in, the handheld says what arrived ("Phone sent 3 games, 1 cover and
-12 songs") and an open Games library rescans. The **Files** card's own drop
-target still puts files in the folder it has open.
-
-**Whole folders.** A folder is placed by what is inside it, all of it in one
-place, its subfolders kept:
-
-| Folder | Goes to |
-|---|---|
-| Books and comics (`.epub`, `.pdf`, `.cbz` …) | `Books/<Folder>` |
-| An album (songs with their covers, `.cue`, `.log`) | `Music/<Folder>` |
-| Videos / pictures | `Videos/<Folder>` / `Pictures/<Folder>` |
-| A disc game (`.cue` + tracks, `.gdi`, `.m3u` + discs, `.chd`), or one console's games | `Roms/<console>/<Folder>` (the console from a disc's first bytes, a zip's file list, or asked) |
-| A DOS game (`.exe`, `.bat`, a dosbox `.conf`) / a ScummVM game | `Roms/DOS/<Folder>` / `Roms/SCUMMVM/<Folder>` |
-| A folder named after a console (`GBA`, `Game Boy (GB)`) or a media folder (`Books`) | merged into that folder |
-| A PortMaster port, scripts or programs, anything else | `PhoneDrop/<Folder>` |
-
-When it cannot tell (songs and videos together, a `.chd` with no console in
-its name) it asks. Hidden and system files (`.DS_Store`, `Thumbs.db`) stay
-behind, a path the card cannot hold is left out and named, files already there
-are replaced only after one confirm, and the handheld says "Phone sent the
-folder Asimov (42 books)". Up to 5000 files per folder.
-
-The pairing card shows the device's IP address (for example
-`http://192.168.1.42`). If port 80 is unavailable, the address includes the
-Companion's port (usually `:8317`). Type it into a browser on the same network
-and enter the six-digit PIN shown on the device. The QR code opens the page
-with that PIN already filled in. The server runs in the background for the
-whole session, and **Y**
-issues a new PIN on the spot (which also invalidates every companion link
-already shared; a Screen Share link has its own token and keeps working).
-`JUKAHUB_COMPANION_PORT` overrides the port (default `8317`).
-If the handheld exposes a USB network connection, the pairing card also shows
-its USB address. Open that address on the connected computer to use the same
-Files page over the cable.
+More on the first steps, the pairing card and sending whole folders:
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
 ## Share the screen on a TV (Screen Share)
 
 The Smart Pro has no HDMI port, so JukaHub sends its screen to a browser
 instead. **Start → Tools → Screen Share** (search finds it as *screen share*,
-*cast*, *tv* or *hdmi*) shows a link and a QR code. Open the link on a smart TV,
-laptop, tablet or phone on the same Wi-Fi — or open it on a laptop and cast that
-tab to a TV — and the handheld's screen appears live, games included, with no
-app to install: the stream is plain MJPEG in a web page. The page can also play
-the handheld's sound, and — once you allow it on the handheld — a controller,
-keyboard or phone touch pad on the viewer's side plays the handheld: put it on
-the table, play on the TV.
+*cast*, *tv* or *hdmi*) shows a link and a QR code; open it on a smart TV,
+laptop, tablet or phone on the same Wi-Fi — or on a laptop and cast that tab to
+a TV — and the handheld's screen appears live, games included, with no app to
+install.
 
-* **A / Enter** on *Share* starts or stops sharing. It is off by default; while
-  it is off the link's page waits, and it starts by itself when you switch
-  sharing on.
-* **Quality**: Smooth (640 px, 20 fps; the handheld's default), Balanced
-  (960 px, 15 fps; a PC's) or Sharp (full size, 10 fps); **Left / Right** change
-  it. The handheld captures its menus at most about twelve times a second
-  (fewer when the GPU is slow to hand a frame back), and a screen that is not
-  changing is re-sent once a second instead of at the frame rate.
-* **Games too** (handheld): JukaHub stops drawing while a game runs, so the
-  picture then comes from the screen's framebuffer — through the bundled ffmpeg
-  when it is installed, otherwise JukaHub's own reader at up to 8 fps and
-  640 px. Switch it off and viewers see a pause card while you play, hear
-  nothing of the game, and a playing viewer's presses do not reach it.
-* On the viewer page, **F** or a double-click (double-tap) toggles full screen
-  and **M** cycles Fit / Fill / Pixel-perfect; the controls hide after three
-  idle seconds. Add `&tv=1` to the link for a TV browser: no buttons, just the
-  picture, and the remote's first key turns the sound on. A browser that cannot
-  show the stream falls back to single frames.
-* **Sound** (on by default): the viewer page's **Sound** button plays what the
-  handheld plays — its menus, music and videos, and the sound of games started
-  while sharing is on (each game's ALSA output is copied on its way to the
-  speaker, so a game already running when you switch sharing on keeps its
-  sound on the handheld until it is started again). It arrives as compact
-  ADPCM, about 50 kB/s, a tenth of a second or so behind. The handheld keeps
-  playing too; turn it down there if the TV is enough.
-* **Controllers** (Ask by default): **Play** on the viewer page asks the
-  handheld; the request appears on the panel's *Controllers* row (a toast says
-  so when the panel is closed), where **A** lets that viewer play and **X**
-  says no. A phone paired with the Phone Companion's PIN plays without asking.
-  One viewer plays at a time; **X** on the panel takes control back, and a new
-  link, switching sharing or Controllers off, or the viewer leaving ends the
-  turn and lets go of every held button. On the handheld the presses go into
-  its own pad, so games hear them as if you had pressed the buttons — by
-  position, like the handheld's (right = A, bottom = B, top = X, left = Y; the
-  page can switch to by-letter for an Xbox pad) — sticks and triggers included.
-  On a PC only JukaHub's own screens hear them. While a viewer plays, the menus
-  are captured at up to 24 fps instead of 12.
-* Playing from the viewer page: a controller connected to the TV, laptop or
-  phone (press one of its buttons first; Chrome and Edge show controllers only
-  to https pages, so use Firefox or Safari on this http:// link), the keyboard
-  (arrows, X = A, Z = B, S = X, A = Y, Q/W = L1/R1, E/R = L2/R2, Enter =
-  Start, Shift = Select, H = Menu), or the on-screen touch pad on a phone or
-  tablet.
-* A red **LIVE** pill at the top of the handheld's screen shows while anyone
-  watches, and says so when a viewer plays or asks to; it never appears in the
-  stream or in screenshots.
-* The link keeps working across restarts until you make a new one: **Y** in the
-  panel does that, and the old link stops at once. The Phone Companion's PIN is
-  not changed.
-* Up to six browsers can watch at once (streams and single-frame viewers
-  together).
-* In safe mode, or with no network, the panel says why and sharing stays off.
+- **A / Enter** starts or stops sharing. It is off by default.
+- **Quality** (Left/Right): Smooth (640 px, 20 fps, the default), Balanced
+  (960 px, 15 fps) or Sharp (full size, 10 fps).
+- **Sound** is on by default: menus, music, videos and the games started while
+  sharing is on, about a tenth of a second behind.
+- **Controllers** ask first: **Play** on the viewer page requests control, and
+  **A** on the handheld's panel allows it. A phone paired with the companion PIN
+  plays without asking. One viewer plays at a time; **X** takes control back.
+- **Games too** streams the framebuffer while a game runs (through ffmpeg at
+  about 12 fps, or JukaHub's own reader at up to 8 fps and 640 px).
+- On the viewer, **F** or a double-click toggles full screen and **M** cycles
+  Fit / Fill / Pixel-perfect. Add `&tv=1` for a TV browser: no buttons, just the
+  picture.
+- A red **LIVE** pill shows on the handheld while anyone watches; it never
+  appears in the stream.
+- Up to six browsers can watch at once, and the link keeps working across
+  restarts until **Y** makes a new one (the old one stops at once).
 
-The link lets a viewer watch and listen; it cannot type text or upload, and it
-presses buttons only after you allow that viewer on the handheld. The
-phone-pairing code (Home's header QR, the pairing card, and the panel's own code
-and link) is painted over in the shared picture. Everything else on screen is
-shown — including what you type — so share the link only with people you trust,
-and switch sharing off when you are done.
-
-## Build a screen in the web builder
-
-The [web builder](https://generate.jukalang.com) lays out a handheld screen
-without writing code. Start from the welcome dialog, then:
-
-1. Pick **Start blank**, **Start from template**, or **Load config** to import
-   an existing `jukaconfig.json` or `jukaconfig.xml`.
-2. Drag Button, Label, Image, Input, Menu and the other components from the
-   left sidebar onto the canvas.
-3. Select an element to edit its properties in the Inspector.
-4. Use **Check** to catch problems, then **Export** as JSON or XML.
-
-![The welcome dialog with Start blank, Start from template and Load config](screenshots/state-guide.png)
-
-![A 1280 × 720 TrimUI Smart Pro screen laid out on the desktop canvas](screenshots/design-desktop.png)
-
-![An element selected on the canvas, with its position and size in the Inspector](screenshots/state-element.png)
-
-![The AI assistant panel open beside the canvas](screenshots/state-ai.png)
-
-On a narrow screen the builder switches to Library, Canvas and Inspector tabs:
-
-![The builder on a phone-sized screen with the Library, Canvas and Inspector tabs](screenshots/design-phone.png)
-
-### Push a design to the handheld
-
-**Live Builder** sends the design to a running JukaHub over Wi-Fi and reloads it
-in place. On the handheld, turn it on in **Settings → Network → Live Builder**;
-the row shows the address and the six-digit pairing code. In the builder open
-**Device**, enter both and press **Push to device**. Open the builder from a
-copy on `http://localhost`: a browser does not let an HTTPS page reach a plain
-HTTP device. The receiver switches itself off after 30 minutes without use, and
-a design that can run programs or change protected settings waits until you
-approve it on the device — see
-[SECURITY.md](SECURITY.md#live-builder-the-web-builders-receiver).
-
-| Variable | Effect |
-|----------|--------|
-| `JUKAHUB_LIVE_BUILDER=0` / `1` | Never start the receiver / start it with JukaHub, whatever the Settings switch says |
-| `JUKAHUB_LIVE_LAN=1` | On a PC, listen on the network instead of this computer only (or set `liveBuilderLAN`) |
-| `JUKAHUB_LIVE_PORT` | Port to listen on (default `8422`; a busy port falls back to a free one, shown in Settings) |
-| `JUKAHUB_LIVE_ORIGINS` | Extra builder origins allowed to call the device, comma-separated (a self-hosted builder) |
-
-## Share and remix a design
-
-In the [web builder](https://generate.jukalang.com), **Share** turns the current
-theme, fonts and layout into one link. Nothing is uploaded: the design is
-compressed into the link itself, and account keys, tokens and recent activity
-are stripped first. Opening the link shows **Remix**, which loads a fresh copy
-into that person's workspace; their existing design is only replaced when they
-choose it. Very large projects may exceed chat-app URL limits — in that case
-use **Export → JSON** and send the file.
+The link lets a viewer watch and listen; it cannot type or upload, and it
+presses buttons only after you allow it on the handheld. The pairing QR is
+painted over in the shared picture, but everything else on screen is shown —
+including what you type — so share the link only with people you trust and
+switch sharing off when you are done.
 
 ## Updating
 
-JukaHub updates itself. On launch it checks the latest release on GitHub and,
-when a newer build exists, offers it as a **download icon in the home header**,
-immediately left of the weather text. Select it with the D-pad (the arrows step
-onto it from the weather chip) and press **A**, or click it: one press downloads
-the archive for the platform (`JukaHub-Windows.zip` on Windows,
-`JukaHub-Trimui.zip` on TrimUI), checks its SHA-256 against the digest GitHub
-publishes for that asset (a truncated or swapped archive is rejected before it
-is unpacked) and, when the release ships a signed `release.json`, verifies that
-signature with the same Ed25519 key as the Patch repository — so a compromised
-release account is not enough to install a build. It then unpacks the archive, replaces the app files
-and restarts. Progress shows in the install bar over whatever screen is open, so
-there is no menu to walk through. Your `jukauser.json` settings, favorites and
-media are untouched, and an interrupted update is rolled back automatically at
-next launch. The once-per-launch "update available" prompt installs the same
-way.
-
-On the handheld the restart happens in place: `launch.sh` runs the new build
-itself and keeps the firmware supervisors paused, so the stock launcher never
-comes back underneath JukaHub. A build installed before this handover still
-relaunches the old way once — that update replaces `launch.sh` with the new one,
-and every update after it restarts cleanly.
-
-After the restart, **What's new** opens once with that release's notes (the
-notes are cached before the swap, so it also works offline). You can reopen it
-any time from **Tools → Community & support**. Home shows the installed build
-date beside the JukaHub title. **Tools → Patch → Check for updates** runs the
-same check manually.
-Set `JUKAHUB_NO_AUTOUPDATE=1` to disable automatic updates, or extract a release
-archive over `Apps/JukaHub` by hand.
+JukaHub updates itself. On launch it checks the latest release and, when a
+newer build exists, offers a **download icon in Home's header** (just left of
+the weather). One press downloads the right archive, checks its SHA-256 against
+the digest GitHub publishes, verifies the signed release manifest when there is
+one, unpacks it, replaces the app files and restarts — with progress over
+whatever screen is open. Settings, favourites and media are untouched, and an
+interrupted update rolls back at the next launch. **What's new** opens once
+after the restart; **Tools → Patch → Check for updates** runs the check by hand,
+and `JUKAHUB_NO_AUTOUPDATE=1` turns the automatic check off.
 
 ## Privacy
 
-Anonymous diagnostics are **off by default**. The switch is under **Tools →
-Community & support**, and the app never sends anything unless you turn it on.
-When enabled, about every ten launches the app files a public GitHub issue
-marked `[Info]` with the build/version, device model, platform,
-OS/architecture and coarse diagnostics. There is no install ID, account,
-filename, log, user-authored config content or usage history. **Report a bug**
-sends a redacted report straight from the device after you review it; it
-becomes a public GitHub issue, not under your name
+Anonymous diagnostics are **off by default** (the switch is **Tools → Community
+& support**). When enabled, about every ten launches the app files a public
+GitHub issue marked `[Info]` with the build, device model, platform and coarse
+diagnostics — no install ID, account, filename, log, config content or usage
+history. **Report a bug** sends a redacted report straight from the device after
+you review it, as a public issue, not under your name
 ([docs/BUG_REPORTS.md](docs/BUG_REPORTS.md)).
 
-To uninstall, delete the `Apps/JukaHub` folder.
+**To uninstall, delete the `Apps/JukaHub` folder.** Nothing else is left behind.
 
 ## Something is wrong?
 
@@ -699,172 +429,234 @@ Logs are on the SD card, so you can read them on a PC without SSH.
 
 | Problem | What to do |
 |---------|-----------|
-| Not in the Apps menu | Reboot. Check the folder is `Apps/JukaHub` and contains `launch.sh`. |
-| Black screen or closes at once | Send `Apps/JukaHub/errors.txt` — the launcher's log — and the newest `crash-*.txt` next to it (on Windows in `%LOCALAPPDATA%\JukaHub\logs`). |
-| A plugin, a setting or a bad update broke startup | Hold **L + R + Start** (Ctrl + Alt + R on a keyboard) while JukaHub starts: safe mode plus a recovery card (previous version, last good settings, reset settings). Three failed starts in a row start safe mode by themselves. Or create an empty `safe-mode.flag` next to the app (or launch with `--safe-mode`). See [docs/RECOVERY.md](docs/RECOVERY.md). |
-| Screen blinks between the stock menu and JukaHub after an update | Both UIs are drawing at once: the launcher on the card is older than the app. Update once more, or copy `launch.sh` from the release archive over `Apps/JukaHub/launch.sh`, then reboot. |
-| The stock menu glitches after you leave JukaHub, or JukaHub flickers when it starts with the device | Send `Apps/JukaHub/errors.txt` and `Apps/JukaHub/autostart.log`: `launch.sh` writes who started it, what it paused and let go, and when the stock menu came back, and JukaHub adds a `display:` line for anything else drawing on the screen. Say too what the glitch looks like, and whether you left with JukaHub's Exit or the firmware's MENU + POWER. |
-| YouTube search fails | Check Wi-Fi; open **Logs** from the Start menu for the app's own log. |
-| A video goes black for a second, then says it is downloading | The stream would not open, so JukaHub downloads the video and plays it from the card; the card shows the percentage, the speed and the time left (**B** cancels). If every way fails, the message says why; `errors.txt` has a `decoder for` line (the stream) and `youtube: download failed` lines (each way the download tried). |
+| Not in the Apps menu | Reboot. Check the folder is `Apps/JukaHub` (or `Apps/JukaHub-Trimui`) and contains `launch.sh` and `JukaHub`. |
+| Black screen, or it closes at once | Send `Apps/JukaHub/errors.txt` — the launcher's log — and the newest `crash-*.txt` next to it (on Windows, `%LOCALAPPDATA%\JukaHub\logs`). |
+| A plugin, a setting or a bad update broke startup | Hold **L + R + Start** (Ctrl + Alt + R on a keyboard) while JukaHub starts: safe mode plus a recovery card (previous version, last good settings, reset settings). Three failed starts in a row do it by themselves. [docs/RECOVERY.md](docs/RECOVERY.md) |
+| Screen blinks between the stock menu and JukaHub after an update | Both UIs are drawing: the launcher on the card is older than the app. Update once more, or copy `launch.sh` from the release archive over `Apps/JukaHub/launch.sh`, then reboot. |
+| The stock menu glitches after leaving JukaHub | Send `Apps/JukaHub/errors.txt` and `Apps/JukaHub/autostart.log`, and say what the glitch looks like. |
+| YouTube search fails | Check Wi-Fi; **Logs** in the Start menu has the app's own log. |
+| A video goes black, then says it is downloading | The stream would not open, so JukaHub downloads it to the card and plays from there (**B** cancels). |
 | Video stutters | Settings → playback resolution → try `480` or `360`. |
 | Text shows as boxes | `Inter-Regular.ttf` is missing from `Apps/JukaHub`. |
 
-`Apps/JukaHub/errors.txt` is the launcher log. For the app's own log, open
-**Logs → Export** on the device; it writes `Apps/JukaHub/logs.txt`. If you need
-help, **Tools → Community & support → Report a bug** sends a report with
-redacted diagnostics straight from the device and shows the issue number it
-became; you can still attach a log or ask on [Discord](https://discord.gg/R9qgJjh5jG).
+`errors.txt` is the launcher log; **Logs → Export** writes the app's own log to
+`Apps/JukaHub/logs.txt`. **Tools → Community & support → Report a bug** sends a
+report with redacted diagnostics from the device and shows the issue number it
+became. You can also ask on [Discord](https://discord.gg/R9qgJjh5jG).
 
-## Other devices
+## Build a screen in the web builder
 
-The same package is built for **TrimUI Smart Pro S**, **TrimUI Brick**,
-**Brick Pro** and **TrimUI Hammer** (pick the matching file on the Releases
-page). JukaHub detects the panel and picks its canvas automatically: 1280×720
-on the Smart Pro and Smart Pro S, and a compact 960×720 canvas scaled to the
-1024×768 4:3 Brick, Brick Pro and Hammer screens. Windows builds are for trying
-JukaHub on a PC.
+The [web builder](https://generate.jukalang.com) lays out a handheld screen
+without writing code: pick **Start blank**, **Start from template** or **Load
+config**, drag Button, Label, Image, Input and Menu from the sidebar, edit the
+selected element in the Inspector, then **Check** and **Export** as JSON or XML.
+On a narrow screen it switches to Library, Canvas and Inspector tabs.
+
+![The welcome dialog with Start blank, Start from template and Load config](screenshots/state-guide.png)
+
+![A 1280 × 720 TrimUI Smart Pro screen laid out on the desktop canvas](screenshots/design-desktop.png)
+
+![The builder on a phone-sized screen with the Library, Canvas and Inspector tabs](screenshots/design-phone.png)
+
+**Push a design to the handheld.** On the device, turn on **Settings → Network
+→ Live Builder**; the row shows an address and a six-digit pairing code. In the
+builder open **Device**, enter both and press **Push to device** — the design
+reloads in place over Wi-Fi. The receiver switches itself off after 30 minutes
+without use, and a design that can run programs or change protected settings
+waits until you approve it on the device
+([SECURITY.md](SECURITY.md#live-builder-the-web-builders-receiver)). Open the
+builder from a copy on `http://localhost`: a browser does not let an HTTPS page
+reach a plain HTTP device.
+
+| Variable | Effect |
+|----------|--------|
+| `JUKAHUB_LIVE_BUILDER=0` / `1` | Never start the receiver / start it with JukaHub, whatever the Settings switch says |
+| `JUKAHUB_LIVE_LAN=1` | On a PC, listen on the network instead of this computer only (or set `liveBuilderLAN`) |
+| `JUKAHUB_LIVE_PORT` | Port to listen on (default `8422`; a busy port falls back to a free one, shown in Settings) |
+| `JUKAHUB_LIVE_ORIGINS` | Extra builder origins allowed to call the device, comma-separated |
+
+**Share a design.** **Share** turns the theme, fonts and layout into one link:
+nothing is uploaded, the design is compressed into the URL, and account keys,
+tokens and recent activity are stripped first. Opening the link offers
+**Remix**, which loads a fresh copy into that person's workspace. For very large
+projects, **Export → JSON** and send the file.
 
 ## Security
 
-The short version — [SECURITY.md](SECURITY.md) has the threat model, the key
-management and the honest limits, and **Tools → Security & trust** shows the live
-state on the device without a PC.
+[SECURITY.md](SECURITY.md) has the threat model, the key management and the
+limits; **Tools → Security & trust** shows the live state on the device.
 
-- **Secrets are encrypted, not hidden in a shell variable.** API keys and tokens
-  in `jukaconfig.json` are AES-256-GCM with per-value nonces; set your own key
-  with `JUKAHUB_CRYPTO_KEY`, and the posture view tells you when the built-in
-  default is still in use. `./JukaHub -set-secret <field>` reads the value from
-  stdin so it never lands in shell history.
-- **Updates and packages are signed.** The Patch repository index is
-  Ed25519-signed with the public key compiled into the binary, and every archive
-  is SHA-256-checked against that index before it is installed — a rollback copy
-  is kept. HTTPS alone is never treated as authenticity.
-- **Downloads come from a curated allowlist.** Helper tools and the
-  [Toolbox](#toolbox) resolve only from repos listed in code, match release
-  assets on stable name parts, skip checksum side-cars, and stream through the
-  same size-capped downloader. Running one is a direct exec, never a shell.
-- **The LAN servers are opt-in and visible.** FTP/SFTP start only when you press
-  the row, SFTP generates its own password and prints a host-key fingerprint, and
-  the posture view names whatever is listening.
-- **No telemetry unless you ask.** Off by default; every ten opted-in launches
-  file a public informational issue limited to build and device facts. A
-  separately configured collector can also receive a one-word crash event.
+- **Secrets are encrypted** — API keys and tokens in `jukaconfig.json` are
+  AES-256-GCM with per-value nonces; `JUKAHUB_CRYPTO_KEY` sets your own key, and
+  `./JukaHub -set-secret <field>` reads a value from stdin so it never lands in
+  shell history.
+- **Updates and packages are signed** — the Patch index is Ed25519-signed with
+  the public key compiled into the binary, archives are SHA-256-checked, and a
+  rollback copy is kept. HTTPS alone is never treated as authenticity.
+- **Downloads come from a curated allowlist** — helpers and the
+  [Toolbox](#toolbox) resolve only from repos listed in code, through a
+  size-capped downloader, and run as a direct exec, never a shell.
+- **The LAN servers are opt-in and visible** — FTP/SFTP start only when you
+  press the row, SFTP makes its own password, and the posture view names
+  whatever is listening.
+- **No telemetry unless you ask** — off by default, limited to build and device
+  facts when on.
 
 ## Toolbox
 
 **Tools → Toolbox** installs popular command-line tools on demand and runs them
-with visible output: `rclone` (cloud/SSH sync), `jq` (JSON), `ripgrep` and `fd`
-(search), `pandoc` (document conversion) and `age` (encryption). **A** installs
-the first time and runs afterwards, **X** opens the on-screen keyboard for
+with visible output: `rclone`, `jq`, `ripgrep`, `fd`, `pandoc` and `age`. **A**
+installs the first time and runs afterwards, **X** opens the keyboard for
 arguments, **Y** copies the installed path. Installed tools also work from
-Power tools → Script snippets, so one press can turn a tool into a button.
-
-Three network scanners sit at the end of the catalog — `naabu` (open ports),
-`httpx` (which hosts answer HTTP) and `dnsx` (DNS records) — for looking at your
-own LAN. They are the only entries that send traffic to another machine, so the
-first run of any of them asks once, and the answer is remembered. See
-[Toolbox → Network scanning](docs/TOOLBOX.md#network-scanning).
-
-Installers are fetched from each project's own GitHub releases; nothing is
-bundled and nothing is uploaded. What the toolbox does and does not verify is in
+Power tools → Script snippets, so one press can turn a tool into a button. The
+three network scanners at the end of the catalogue (`naabu`, `httpx`, `dnsx`)
+ask once before they touch another machine
+([docs/TOOLBOX.md](docs/TOOLBOX.md#network-scanning)); installers come from each
+project's own GitHub releases, and what is verified is in
 [SECURITY.md](SECURITY.md#toolbox-and-helper-tool-downloads).
 
 ## Contributing
 
-Start with the [engineering backlog](player/MODERNIZATION.md): it is the one
-task list for the player, the builder and AndroidRT, with priorities, the files
-to read, and what "done" means for each task — including the checks that still
-need a device. Small, well-scoped work is the best way in: issues labelled
+The one task list is the [engineering backlog](player/MODERNIZATION.md), with
+priorities, the files to read and what "done" means. Small, well-scoped work is
+the best way in: issues labelled
 [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue).
-Setup, test commands and commit rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
-Questions and feature talk happen on
-[Discord](https://discord.gg/R9qgJjh5jG) and in
-[Discussions](https://github.com/jukaLang/JukaHubV2/discussions); support
-paths are listed in [SUPPORT.md](SUPPORT.md).
+A clone that builds is about five minutes
+([docs/QUICK_START.md](docs/QUICK_START.md)); setup, checks and commit rules are
+in [CONTRIBUTING.md](CONTRIBUTING.md). Questions go to
+[Discord](https://discord.gg/R9qgJjh5jG) and
+[Discussions](https://github.com/jukaLang/JukaHubV2/discussions); support paths
+are in [SUPPORT.md](SUPPORT.md).
 
-The app screenshots in this README use stand-in data: the clock, date, alarm,
-network name and pairing address are made up and the weather is left out.
-`JukaHub --screenshot-tour ../screenshots`, run from `player/`, retakes all
-four the same way, with controller hints; see
-[Screenshots](docs/DEVELOPMENT.md#screenshots) for what it hides.
+Images in this README come in three kinds. The app screenshots
+(`screenshots/`) use stand-in data — the clock, date, alarm, network name and
+pairing address are made up and the weather is left out — and
+`JukaHub --screenshot-tour ../screenshots`, run from `player/`, retakes them
+the same way ([Screenshots](docs/DEVELOPMENT.md#screenshots)). The two images
+in **On the device** are captures taken from a real Smart Pro's screen
+(`hardware-captures/`). The install steps, the SD-card layout and the controls
+sheet are drawn diagrams, not captures of a device.
 
 ## Documentation
+
+**Start here:**
 
 | Page | Covers |
 |------|--------|
 | [The ten-minute tour](docs/TOUR.md) | what the app feels like, from a cold SD card to Continue, in one story |
 | [Getting started](docs/GETTING_STARTED.md) | a player's first steps in JukaHub |
-| [Developer quick start](docs/QUICK_START.md) | the five-minute path to a clone that builds, runs and checks |
 | [Controls](docs/CONTROLS.md) | every button and key, screen by screen |
+| [Developer quick start](docs/QUICK_START.md) | the five-minute path to a clone that builds, runs and checks |
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |
 | [Building](docs/BUILDING.md) | Windows/Linux/ARM64 builds, SD-card packaging, releases, CI |
-| [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
-| [Android and the APK Store](docs/ANDROID.md) | the APK Store's verdicts on the APKs you have, AndroidPak/AndroidRT for native Android apps and games (experimental), Waydroid installs, and what cannot run and why |
-| [PS Remote Play](docs/REMOTE_PLAY.md) | the built-in PS4/PS5 client, pairing, quality profiles and troubleshooting |
-| [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
-| [Voice command](docs/VOICE.md) | the voice orb (Menu, or F4) and saying what to open — through the handheld's microphone or your phone's keyboard — what it understands, and how it finds the microphone |
-| [Chat voice](docs/VOICE_CHANNEL.md) | the Voice tab's free voice room (one click, no sign-up, Mumble apps on phones can join), voice clips, private Voice Channels, and the optional self-hosted relay |
-| [Spatial audio](docs/SPATIAL_AUDIO.md) | virtual surround on headphones, wider stereo on the speakers, and RetroArch games through a filter JukaHub ships |
-| [Theme files](docs/THEMES.md) | the complete theme JSON schema and the shared glass rules |
-| [Smart home](docs/SMART_HOME.md) | The Smart Home tab: TP-Link Kasa and Tapo, Google Cast, Home Assistant, Apple Home and Google Home through Matter; the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
-| [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
-| [TV mode](docs/TV_MODE.md) | the Brick Pro on a TV: detection, larger text, the controller as player 1, the built-in screen off |
-| [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
-| [Pick up and play](docs/PICK_UP_AND_PLAY.md) | what was seen to work on your model (Tested on this device), every save checked and the last one shown, updates that undo themselves, and the guided Device check |
-| [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
-| [USB file transfer](docs/USB_FILE_TRANSFER.md) | the SD card on a computer over a USB cable (MTP): Windows, Linux, Mac, startup lock, troubleshooting |
-| [Controller Mode](docs/CONTROLLER_MODE.md) | the handheld as a game controller: USB cable, Wi-Fi to the JukaPad receiver, DSU for PC emulators, Bluetooth gamepad (beta), layouts, Menu to come back |
-| [USB controller](docs/USB_GAMEPAD.md) | the USB-C port as an Xbox 360-compatible or generic HID controller: the kernel check, the tester screen, ADB given back |
-| [VPN](docs/VPN.md) | WireGuard: importing a configuration (card, Files or phone), what goes through the tunnel, how it works on the handheld and on Windows |
-| [DNS](docs/DNS.md) | Settings → Network → DNS: Cloudflare, Google, Quad9, AdGuard, family filtering or your own servers (a Pi-hole), Find the fastest DNS, where the choice applies |
+
+<details>
+<summary><b>Every other page</b> — games, media, network, device and developer reference</summary>
+
+**Games and emulation**
+
+| Page | Covers |
+|------|--------|
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
-| [Looks](docs/LOOKS.md) | per-console picture looks (CRT, LCD, SkyWalker541's pixel transparency), Download looks, Tune look, overlays, overscan |
-| [Get Homebrew](docs/HOMEBREW.md) | new games from itch.io for ten consoles: browsing, the itch.io key, installs onto the shelves, updates |
-| [Box art](docs/BOX_ART.md) | where covers come from: libretro thumbnails, the LaunchBox Games Database, ScreenScraper sign-in; .7z games by checksum |
-| [Battery warnings](docs/BATTERY_WARNINGS.md) | the low-battery level, blink, in-game message and save-and-suspend level; battery on the lights; Menu + volume brightness |
-| [Light gun](docs/LIGHT_GUN.md) | gun games in RetroArch with the right stick as the gun: Move and Point aiming, per-game tuning, the practice target, supported cores |
-| [RetroAchievements](docs/RETROACHIEVEMENTS.md) | RetroArch's achievement options per launch (hardcore, leaderboards, challenge indicators, encore…), Sign in for games, the unlock lights |
-| [Game hotkeys](docs/GAME_HOTKEYS.md) | RetroArch's hotkey button and shortcuts per console and per game, copied from the pad's own button codes |
-| [Game translation](docs/GAME_TRANSLATION.md) | RetroArch's AI service: translate the game screen with your Groq key or your own service |
-| [Kid mode](docs/KID_MODE.md) | Kiosk and Kid modes: what is locked, games for kids, the parent code, the Konami code, the escape hatch |
-| [Idle](docs/IDLE.md) | dim, sleep or power off when idle in games, idle hook scripts, the battery line in games |
-| [Card check](docs/CARD_CHECK.md) | SD card health: file system flags, unreadable files, the fake card test, repairing on a computer |
-| [WebDAV share](docs/NETWORK_SHARE.md) | the card as a drive in Windows Explorer, macOS Finder and Linux file managers |
-| [SMB share](docs/SMB_SHARE.md) | the card as `\\IP\JukaHub` over SMB 2.1 (Windows 11 24H2 signing, macOS, Linux), the NetBIOS name, read-only, limits |
-| [VNC and Telnet](docs/VNC.md) | see and control the handheld from any VNC app, keys and mouse, the Telnet shell, passwords and limits |
-| [Tailscale](docs/TAILSCALE.md) | the built-in Tailscale: install, QR or auth-key sign-in, reaching the servers from anywhere, battery rules |
-| [Widescreen](docs/WIDESCREEN.md) | 16:9 widescreen hacks per console and per game, which emulators have one, the PlayStation analog controller |
-| [Look packs](docs/LOOK_PACKS.md) | look packs (pack.json), console icon packs, console names by region, the power-off picture |
-| [Collections](docs/COLLECTIONS.md) | automatic folders on the Collections tab, play counts, the Game slideshow and Game videos idle screens, NextUI collections shared both ways |
-| [Quick menu](docs/QUICK_MENU.md) | the Quick menu on the TrimUI button: the tiles, every way to open it, Menu on Home, theme pictures (NextUI themes' too) and Backgrounds only |
-| [Ghost Challenges](docs/GHOST_CHALLENGES.md) | race a friend's run of the arcade games (or your best): what a run records, sending it to a paired JukaHub or as a file, the race |
-| [CHIP-8](docs/CHIP8.md) | the built-in CHIP-8 / SUPER-CHIP / XO-CHIP player, quirks and keys, Get CHIP-8 games from the chip8Archive |
-| [WASM-4](docs/WASM4.md) | WASM-4 carts on their own shelf, the first-start core install, Get WASM-4 carts from wasm4.org |
-| [Game Boy Printer](docs/GB_PRINTER.md) | printing from Game Boy games with DoubleCherryGB, the scrapbook, prints on the phone |
-| [Email and calendar](docs/EMAIL_CALENDAR.md) | mail accounts and calendar links added from your phone, app passwords per provider, Microsoft sign-in, reminders, what is stored encrypted |
-| [Sync](docs/SYNC.md) | one QR code sets up every place saves follow (another JukaHub, Google Drive, WebDAV, RomM, Syncthing); what syncs by itself around games |
-| [RomM server](docs/ROMM_SERVER.md) | connect to your own RomM library, download games, covers and BIOS, sync saves |
-| [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
-| [Device Sync](docs/DEVICE_SYNC.md) | two paired handhelds share saves, states, BIOS, collections, recents and play time, missing ROMs and settings; what never travels |
-| [Recordings](docs/RECORDINGS.md) | captures the emulator writes: one folder for both sides, listed and playable, and what an in-game overlay cannot do |
-| [Memory scanner](docs/MEMORY.md) | RAM search and edit for a running game: scan, narrow, write, and what it cannot do |
-| [Controller test](docs/CONTROLLER_TEST.md) | raw stick values, drift verdicts and a button check for a drifting pad |
-| [Time-lapse](docs/TIMELAPSE.md) | one frame every few seconds of a playthrough, assembled into a short mp4 on exit |
-| [Curation Hub](docs/CURATION.md) | essentials checklist, UI/theme profiles, compatibility votes, the optional community feed |
-| [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |
-| [Game soundtracks](docs/SOUNDTRACKS.md) | NSF, SPC, GBS, VGM, SID and module music in the music player: songs per file, lengths and fades, covers, limits |
-| [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
-| [Toolbox](docs/TOOLBOX.md) | installing rclone, jq, ripgrep, fd, pandoc and age plus the naabu/httpx/dnsx scanners, running them with arguments, the one-time authorization prompt, what is and is not verified |
-| [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
-| [Engineering backlog](player/MODERNIZATION.md) | every open task with priority, files and acceptance criteria; the hardware checks; the ideas parking lot |
-| [UX review](docs/UX_REVIEW.md) | the November 2026 design critique: principles and per-screen findings |
+| [ROM Audit](docs/ROM_AUDIT.md) | No-Intro/Redump DAT check: missing games, bad dumps, duplicates, renames |
+| [Emulator compatibility](docs/COMPATIBILITY.md) | per-game reports, hardware tiers, core builds and updates |
+| [Box art](docs/BOX_ART.md) | libretro thumbnails, LaunchBox, ScreenScraper, `.7z` games by checksum |
+| [Looks](docs/LOOKS.md) | per-console picture looks (CRT, LCD, pixel transparency), overlays, overscan |
+| [Widescreen](docs/WIDESCREEN.md) | 16:9 hacks per console and per game, PlayStation analog |
+| [RetroAchievements](docs/RETROACHIEVEMENTS.md) | achievement options per launch, sign-in, unlock lights |
+| [Game hotkeys](docs/GAME_HOTKEYS.md) | RetroArch's hotkey button and shortcuts per console and per game |
+| [Light gun](docs/LIGHT_GUN.md) | gun games with the right stick as the gun, per-game tuning |
+| [CHIP-8](docs/CHIP8.md) · [WASM-4](docs/WASM4.md) | the built-in retro consoles and their cart shelves |
+| [PortMaster](docs/PORTMASTER.md) | browsing and installing ports with their runtimes |
+| [Get Homebrew](docs/HOMEBREW.md) | games from itch.io for ten consoles, installs and updates |
+| [Game profiles](docs/GAME_PROFILES.md) | Windows games and scripts through Box64/Wine |
+| [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
+| [Android and the APK Store](docs/ANDROID.md) | APK verdicts, AndroidRT for native apps and games, Waydroid, what cannot run |
+| [Minecraft on AndroidRT](docs/ANDROID-MINECRAFT.md) | the one Android game tested end to end on a Smart Pro |
+| [J2ME](docs/J2ME.md) · [Java](docs/JAVA.md) · [Godot](docs/GODOT.md) | other app runtimes and what they need |
+| [Netplay and LAN play](docs/REMOTE_PLAY.md) | Remote Play, the watch party and rooms on your Wi-Fi |
+| [Cloud gaming](docs/CLOUD_GAMING.md) · [PC streaming](docs/PC_STREAMING.md) | Game Pass and GeForce NOW, Moonlight and Vibepollo |
+| [Controller Mode](docs/CONTROLLER_MODE.md) | the handheld as a controller: USB, Wi-Fi to JukaPad, DSU |
+| [Party Mode](docs/PARTY_MODE.md) | Guess the Game, discovery and the party page |
+| [Game curation screens](docs/CURATION.md) | essentials checklist, theme profiles, compatibility votes |
+| [Save Manager](docs/SAVE_MANAGER.md) | snapshots, restore, Syncthing setup, phone resume bundle |
+| [Session safety](docs/SESSION_SAFETY.md) · [Pick up and play](docs/PICK_UP_AND_PLAY.md) | saves that survive a crash, and what was seen to work on your model |
+| [Ghost Challenges](docs/GHOST_CHALLENGES.md) | racing a friend's run of the arcade games |
+| [Memory scanner](docs/MEMORY.md) | RAM search for a running game and its limits |
+| [Recordings](docs/RECORDINGS.md) · [Time-lapse](docs/TIMELAPSE.md) | captures the emulator writes, and playthrough time-lapses |
+| [Game Boy Printer](docs/GB_PRINTER.md) | printing from Game Boy games, the scrapbook |
+| [Game translation](docs/GAME_TRANSLATION.md) | translating the game screen through RetroArch's AI service |
+
+**Media and everyday use**
+
+| Page | Covers |
+|------|--------|
+| [Video and music](docs/MUSIC_PLAYER.md) | the audio player's features and roadmap |
+| [Game soundtracks](docs/SOUNDTRACKS.md) | NSF, SPC, GBS, VGM, SID and module music with covers and fades |
+| [Spatial audio](docs/SPATIAL_AUDIO.md) | virtual surround on headphones, wider speakers, games too |
+| [Ambient and dock](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing, sleep timer |
+| [Home tabs](docs/HOME_TABS.md) | how Home is organised and how to rearrange it |
+| [Browser](docs/BROWSER.md) | the text web browser, bookmarks, downloads |
+| [Everyday apps](docs/EVERYDAY_APPS.md) | Tasks, Voice Memos, Paint, Stopwatch, Solitaire |
+| [Text and hex editor](docs/TEXT_EDITOR.md) · [Pads](docs/PADS.md) | editing files, and the sample sequencer |
+| [Tools](docs/TOOLS.md) | search, pins and quick checks |
+| [Open with and default apps](docs/OPEN_WITH.md) | which app opens what |
+| [App Center](docs/APP_CENTER.md) · [Linux packages](docs/LINUX_PACKAGES.md) | TrimUI apps and distribution packages |
+| [Email and calendar](docs/EMAIL_CALENDAR.md) | accounts added from your phone, reminders, encryption |
+| [Theme files](docs/THEMES.md) · [Look packs](docs/LOOK_PACKS.md) | the theme schema and icon/sound packs |
+| [Quick menu](docs/QUICK_MENU.md) | the TrimUI quick menu, its tiles and picture |
+| [Accessibility](docs/ACCESSIBILITY.md) | text scaling, palettes, controller remap |
+| [Kid mode](docs/KID_MODE.md) | Kiosk and Kid modes, the parent code, the escape hatch |
+| [Voice command](docs/VOICE.md) · [Chat voice](docs/VOICE_CHANNEL.md) | the voice orb, voice rooms, clips |
+| [Local AI](docs/LOCAL_AI.md) · [AI tools](docs/AI_TOOLS.md) | the offline models and the AI helpers |
+| [Profiles and Guest](docs/PROFILES.md) | separate settings and saves per person |
+
+**Network, files and device**
+
+| Page | Covers |
+|------|--------|
+| [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks |
+| [USB file transfer](docs/USB_FILE_TRANSFER.md) | the card on a computer over MTP |
+| [USB controller](docs/USB_GAMEPAD.md) · [USB OTG](docs/USB_OTG.md) | the USB-C port as a controller, and host mode |
+| [WebDAV share](docs/NETWORK_SHARE.md) · [SMB share](docs/SMB_SHARE.md) | the card as a drive in Explorer, Finder and Linux |
+| [NAS and network drives](docs/NETWORK_DRIVE.md) | games from a server, SMB, SFTP, WebDAV |
+| [VNC and Telnet](docs/VNC.md) | watching and controlling the handheld from a PC |
+| [Tailscale](docs/TAILSCALE.md) · [VPN](docs/VPN.md) · [DNS](docs/DNS.md) | reaching the device from anywhere, WireGuard, DNS choices |
+| [Hotspot](docs/HOTSPOT.md) | sharing the handheld's connection |
+| [Smart home](docs/SMART_HOME.md) | Kasa/Tapo, Cast, Home Assistant, Matter, MQTT |
+| [Sync](docs/SYNC.md) · [Device Sync](docs/DEVICE_SYNC.md) | saves everywhere, and two handhelds sharing |
+| [RomM server](docs/ROMM_SERVER.md) | your own game library over the network |
+| [SD card move](docs/SD_CARD_MOVE.md) · [Card check](docs/CARD_CHECK.md) | moving to a new card, checking card health |
+| [Recovery](docs/RECOVERY.md) | safe mode, the recovery chord, low-battery suspend |
+| [Battery warnings](docs/BATTERY_WARNINGS.md) · [Idle](docs/IDLE.md) | low-battery behaviour and idle actions |
+| [TV mode](docs/TV_MODE.md) | the Brick Pro on a TV |
+| [Device tuning](docs/DEVICE_TUNING.md) · [Controller test](docs/CONTROLLER_TEST.md) | per-launch tuning, stick calibration, drift checks |
+| [Device drivers](docs/DEVICES.md) | the four handhelds, their model codes and what is detected |
+| [Hardware validation](docs/HARDWARE_VALIDATION.md) | what was observed on real hardware |
+| [Boot](docs/BOOT.md) · [JukaHub OS](docs/JUKAHUB_OS.md) | boot logo, silent boot, and running as the shell |
+| [Packages](docs/PACKAGES.md) · [Plugins](docs/PLUGINS.md) | the package format, the Patch manager, plugins |
+| [Bug reports](docs/BUG_REPORTS.md) | what the device sends, and what it never does |
+| [Terminal](docs/TERMINAL.md) | the built-in shell |
+| [Everyday tools, network scanning](docs/TOOLBOX.md) | installing and running command-line tools |
+
+**Build it**
+
+| Page | Covers |
+|------|--------|
+| [Architecture](docs/ARCHITECTURE.md) | the three runtimes and where a change lands |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
-| [Architecture](docs/ARCHITECTURE.md) | the three runtimes (player, builder, patch repo), where a change lands |
-| [Contributing](CONTRIBUTING.md) | local setup, tests, what to commit |
-| [Code style](docs/STYLE.md) | naming, comments, config keys, the device budget, test expectations |
-| [Checkpoints design](docs/CHECKPOINTS.md) | the quick-switch/save-slot milestone: options, constraints, phases (not implemented) |
+| [Code style](docs/STYLE.md) | naming, comments, config keys, the device budget |
+| [External dependencies](docs/DEPENDENCIES.md) | what it links against and why |
 | [TrimUI packaging](player/trimui/README.md) | device package, install and troubleshooting notes |
-| [Security](SECURITY.md) | threat model, secret storage, signed updates, tool downloads, the in-app posture view |
+| [Updater design](docs/UPDATER_TUF.md) · [Checkpoints design](docs/CHECKPOINTS.md) | the updater, and a milestone not yet implemented |
+| [Video hardware decode](docs/VIDEO_VPU_OFFLOAD.md) · [Private glibc](docs/PRIVATE_GLIBC.md) | device-specific runtime work |
+| [UX review](docs/UX_REVIEW.md) | the November 2026 design critique |
+| [Engineering backlog](player/MODERNIZATION.md) | every open task with priority, files and acceptance criteria |
+| [Release checklist](docs/RELEASE_CHECKLIST.md) | what a release run needs |
+| [Decisions (ADRs)](docs/adr/) | the decisions other code has to live with |
+| [Security](SECURITY.md) | threat model, secret storage, signed updates, the posture view |
+
+</details>
 
 ## Contributors
 

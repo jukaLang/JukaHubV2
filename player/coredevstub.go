@@ -197,7 +197,13 @@ func devStubLibusbRet(name string) devStubRet {
 // the core) and the functions it imports from it — a versioned import by the
 // library it names, an unversioned one by the library's prefixes.
 func devStubNeeds(f *elf.File, lib string) (versions []string, syms []devStubSym) {
-	info := devStubLibs[lib]
+	return devStubNeedsOf(f, lib, devStubLibs[lib])
+}
+
+// devStubNeedsOf is devStubNeeds for a caller with its own table of the
+// libraries it stands in for (westonStubLibs): info decides which unversioned
+// imports are the library's.
+func devStubNeedsOf(f *elf.File, lib string, info devStubLib) (versions []string, syms []devStubSym) {
 	versions = slices.Clone(elfVersionNeeds(f)[lib])
 	imported, err := f.ImportedSymbols()
 	if err != nil {

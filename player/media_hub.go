@@ -1503,22 +1503,23 @@ func mediaHubBuildRows(config *Config, ctx mediaCardContext, prev []mediaRow) []
 	rows := make([]mediaRow, 0, 5)
 	snap := ctx.saved
 
-	if items := favoritesInProgress(snap.Recent); len(items) > 0 {
-		row := mediaRow{kind: mediaRowContinue, title: "Continue watching"}
-		for _, it := range items {
-			if v, ok := it.Data.(VideoInfo); ok {
-				c := mediaCardFromVideo(v, ctx)
-				if mediaPageIsLocalPath(v.GetURL()) {
-					mediaMarkLocal(&c, ctx)
-				}
-				row.cards = append(row.cards, c)
+	// The row is always there, even with nothing in progress: its empty text
+	// explains where videos will appear instead of the section vanishing.
+	continueRow := mediaRow{kind: mediaRowContinue, title: "Continue watching",
+		empty: "Videos you start playing show here"}
+	for _, it := range favoritesInProgress(snap.Recent) {
+		if v, ok := it.Data.(VideoInfo); ok {
+			c := mediaCardFromVideo(v, ctx)
+			if mediaPageIsLocalPath(v.GetURL()) {
+				mediaMarkLocal(&c, ctx)
 			}
-			if len(row.cards) >= mediaRowCards {
-				break
-			}
+			continueRow.cards = append(continueRow.cards, c)
 		}
-		rows = append(rows, row)
+		if len(continueRow.cards) >= mediaRowCards {
+			break
+		}
 	}
+	rows = append(rows, continueRow)
 	// The searches are the user's own: a screenshot leaves the row out
 	// (screenshotmode.go).
 	if len(mediaHub.recent) > 0 && IsOnline() && !shotModeOn() {

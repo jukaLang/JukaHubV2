@@ -1098,6 +1098,10 @@ func startEmulatorUpdates() {
 	ShowToast("Checking the libretro buildbot for newer core builds…", ToastKindInfo)
 	go func() {
 		defer endPatchOp()
+		// Keep the Wi-Fi keeper's hands off for the whole batch. Core updates
+		// never switch the radio themselves; this stops a background reconnect
+		// from moving it under a download that is already running.
+		defer wifiUserOpBegin()()
 		// The timeout derives from the card's run token, so a cancel from the
 		// card or the activity strip stops the transfer mid-flight.
 		ctx, cancel := context.WithTimeout(installBarRunContext(), 15*time.Minute)

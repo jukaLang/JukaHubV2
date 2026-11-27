@@ -118,6 +118,7 @@ func (a mailcalAccount) hasSecret() bool {
 const (
 	mailcalCalICS    = "ics"    // an .ics / webcal:// link, read-only
 	mailcalCalCalDAV = "caldav" // a CalDAV server with its own login
+	mailcalCalGraph  = "graph"  // a Microsoft account's default calendar via Graph
 )
 
 // mailcalCalendar is one calendar subscription that is not part of a mail

@@ -802,12 +802,22 @@ func powerRestoreUserSnapshot(config *Config, snapshotPath string) error {
 		restored.Variables.Custom = map[string]interface{}{}
 	}
 	userConfigCache = &restored
+	// The snapshot's bytes are on disk as they were. Playtime is its own file
+	// now (playtime_store.go), so a legacy copy inside the snapshot is not part
+	// of the user config a restore leaves behind: it is dropped, and the
+	// sanitized config written back once.
+	stripPlaytimeFromUserConfig(userConfigCache)
 	userConfigNoteLatest(data)
 	if fresh := applyConfigReload(config, next); fresh != nil && fresh != config {
 		*config = *fresh
 		appConfig = config
 	}
+	// Playtime is not part of the snapshot any more: put the session running
+	// now on disk before the stores reload, so a restore cannot lose it (the
+	// reload reads playtime.json back).
+	playtimeFlush(config)
 	bkupReloadStores(config)
+	saveUserConfig(userConfigCache)
 	return nil
 }
 

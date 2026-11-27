@@ -156,6 +156,11 @@ func (fc *FrameRateController) NotifyInput() {
 		fc.currentMode = FrameRateActive
 	}
 	fc.mu.Unlock()
+	// The screen must show what this press changed, including presses that
+	// arrive from outside SDL's event loop (the companion, voice, a VNC
+	// click): dirty-frame presentation draws on the next iteration
+	// (dirtyframe.go).
+	frameMarkDirty()
 	// Faster menus: the CPU speeds up for the frames this press asked for
 	// (uiboost.go; a no-op off the handheld or with the row off).
 	uiBoostNote(uiBoostPress)
@@ -219,6 +224,18 @@ func (fc *FrameRateController) SetBackdropFrame(ms uint32, pastLowPower, burst b
 	fc.backdropPastLowPower = pastLowPower
 	fc.backdropBurst = burst
 	fc.mu.Unlock()
+}
+
+// BackdropRequested reports whether the pictures drawn in the last frame said
+// something on screen moves by itself (requestFrameEvery). Dirty-frame
+// presentation (dirtyframe.go) asks: a moving backdrop needs every frame.
+func (fc *FrameRateController) BackdropRequested() bool {
+	if fc == nil {
+		return false
+	}
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	return fc.backdropMS > 0
 }
 
 // backdropDelay folds a moving backdrop's request into the delay a mode gave:

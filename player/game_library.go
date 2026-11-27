@@ -49,6 +49,10 @@ type libraryGame struct {
 	Playtime     int64
 	Rating       int
 	Year         int
+	// JournalStatus is the game's status from the game page's tags (Playing,
+	// Backlog, Completed or Favorite), "" when it has none. It is a copy of the
+	// tag, so the library and the automatic status folders never disagree.
+	JournalStatus string
 	// HasArt is true when the cover file exists right now. It is filled at
 	// scan time and recounted after a download, so the completeness figures
 	// describe the card rather than the intent.
@@ -69,6 +73,11 @@ type librarySystem struct {
 	Name    string
 	Games   []libraryGame
 	WithArt int
+	// Collection is the collection id this row is a view of, empty for a
+	// console (game_library_collections.go): the Games library lists Home's
+	// collections as rows of the same grid, so a collection opens, browses and
+	// launches through the console page's own code.
+	Collection string
 }
 
 // gameLibraryReport is the built library. Total counts every game, including
@@ -920,6 +929,9 @@ func launchLibraryGameRun(game libraryGame, launcher string) error {
 	if raGlibcApply(cmd, ragPlan) && rec != nil {
 		rec.Glibc = "JukaHub's glibc " + privateGlibcVersion + ", in a mount namespace of its own (" + ragPlan.why + ")"
 	}
+	// Keep a launcher's own output for a crash that happens after the short
+	// diagnosis window too: the saved crash report reads it at exit.
+	diag.captureAny = true
 	// The script's own output, for the card when the game stops at once.
 	output := diag.captureLauncherOutput(cmd)
 	// The launch as it runs, for the card's bug report if it fails: the
@@ -989,6 +1001,9 @@ func launchLibraryGameRun(game libraryGame, launcher string) error {
 		// A game that quit within seconds is diagnosed: what is missing, where
 		// it goes (gamediag.go).
 		diag.exited(waitErr)
+		// A crash after the quick-diagnosis window still leaves a durable
+		// report, with the launcher's last lines and how the process ended.
+		emulatorCrashSave(diag, waitErr)
 		// The game's own CPU limit, said where it can be read: the main loop
 		// presents nothing from the moment the child starts (gamesuspend.go),
 		// so a toast raised at launch expired unseen under the game. This one

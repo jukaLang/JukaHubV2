@@ -127,6 +127,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 		return true
 	}
+	// A picture sent from the phone is fullscreen and takes the pad.
+	if castReceiverController(e, config) {
+		return true
+	}
 	// Community hub is the topmost modal when open.
 	if communityPanel.open {
 		return ctrlCommunity(e, config)

@@ -506,6 +506,10 @@ func (s *companionServer) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handlePage)
 	mux.HandleFunc("/diagnostics", s.handleDiagnostics)
+	// Cast receiver: a phone sends a picture for the handheld to show
+	// (cast_receiver.go). The upload is PIN guarded; the form asks for it.
+	mux.HandleFunc("/cast", s.handleCastReceiverPage)
+	mux.HandleFunc("/api/cast-receiver", s.guard(s.handleCastReceiverImage))
 	mux.HandleFunc("/api/text", s.guard(s.handleText))
 	mux.HandleFunc("/api/key", s.guard(s.handleKey))
 	mux.HandleFunc("/api/open", s.guard(s.handleOpenURL))

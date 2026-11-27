@@ -129,6 +129,7 @@ func installBarBeginLocked(tool, label string) {
 	installBar.endedAt = time.Time{}
 	installBar.animAt = now
 	installBar.retryable = false
+	notifUpdateDownload(installLabelLocked(), 0, 0, 0)
 }
 
 // installSourceSceneName is the name of the scene that is up right now — the
@@ -179,6 +180,18 @@ func installBarUpdateRun(gen uint64, phase string, done, total int64) {
 	installBarProgressLocked(done, total)
 }
 
+// installLabelLocked is the notification row's title for the current run.
+// installBar.mu is held by every caller.
+func installLabelLocked() string {
+	if label := strings.TrimSpace(installBar.label); label != "" {
+		return label
+	}
+	if tool := strings.TrimSpace(installBar.tool); tool != "" {
+		return "Installing " + tool
+	}
+	return "Downloading"
+}
+
 func installBarProgressLocked(done, total int64) {
 	if !installBar.visible {
 		return
@@ -196,6 +209,7 @@ func installBarProgressLocked(done, total int64) {
 	}
 	installBar.done = done
 	installBar.total = total
+	notifUpdateDownload(installLabelLocked(), done, total, installBar.speed)
 }
 
 // installBarResetProgress empties the bar for a second pass over the same
@@ -266,6 +280,7 @@ func installBarDoneLocked() {
 	installBar.message = ""
 	installBar.endedAt = time.Now()
 	installBar.retryable = false
+	notifFinishDownload()
 }
 
 // installBarAbort hides the card at once. It is for a user cancel, not a
@@ -302,6 +317,7 @@ func installBarAbortLocked() {
 	installBar.message = ""
 	installBar.endedAt = time.Time{}
 	installBar.retryable = false
+	notifFinishDownload()
 }
 
 // installBarGeneration returns the number of the run the card belongs to.
@@ -337,6 +353,19 @@ func installBarDoneRun(gen uint64) {
 	}
 }
 
+// installBarDoneRunDetail is installBarDoneRun with a completion sentence.
+// Some runs (a verified component cached on the card) need no restart, so the
+// generic "restart JukaHub" detail would be wrong for them.
+func installBarDoneRunDetail(gen uint64, message string) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if installBar.gen != gen {
+		return
+	}
+	installBarDoneLocked()
+	installBar.message = strings.TrimSpace(message)
+}
+
 // installBarFailRun is installBarFail for one run (see installBarAbortRun).
 func installBarFailRun(gen uint64, reason string) {
 	installBar.mu.Lock()
@@ -359,6 +388,7 @@ func installBarFailLocked(reason string) {
 	installBar.message = reason
 	installBar.endedAt = time.Now()
 	installBar.retryable = false
+	notifFinishDownload()
 }
 
 // installBarRunContext returns the cancellation context of the run the card is
@@ -476,6 +506,16 @@ func installBarSnapshot() (visible bool, tool, phase, detail string, done, total
 	if detail == "" {
 		if installBar.phase == installPhaseDownload && installBar.total > 0 {
 			detail = fmt.Sprintf("%s of %s", formatInstallBytes(installBar.done), formatInstallBytes(installBar.total))
+			if speedText := formatInstallSpeed(installBar.speed); speedText != "" {
+				detail += " · " + speedText
+			}
+			if eta := formatInstallETA(installETA(installBar.done, installBar.total, installBar.speed)); eta != "" {
+				detail += " · " + eta
+			}
+		} else if installBar.total > 0 {
+			// An install can count files or bytes too; without this the bar
+			// moved but the numbers under it said nothing.
+			detail = fmt.Sprintf("%s of %s", formatInstallBytes(installBar.done), formatInstallBytes(installBar.total))
 		}
 	}
 	return true, installBar.tool, installBar.phase, detail,
@@ -492,6 +532,61 @@ func formatInstallSpeed(bps float64) string {
 		return ""
 	}
 	return formatInstallBytes(int64(bps)) + "/s"
+}
+
+// formatInstallPercent keeps small percentages informative: a download that
+// has only begun reads 0.4%, not 0%, and a finished run reads a plain 100%.
+func formatInstallPercent(done, total, percent int64) string {
+	switch {
+	case percent == 100:
+		return "100%"
+	case total <= 0:
+		return ""
+	}
+	p := float64(done) * 100 / float64(total)
+	if p > 100 {
+		p = 100
+	}
+	if p > 0 && p < 10 {
+		return fmt.Sprintf("%.1f%%", p)
+	}
+	return fmt.Sprintf("%.0f%%", p)
+}
+
+// installETA is how long the remaining bytes take at the measured rate.
+func installETA(done, total int64, speed float64) time.Duration {
+	if speed <= 0 || total <= done {
+		return 0
+	}
+	return time.Duration(float64(total-done) / speed * float64(time.Second))
+}
+
+// formatElapsed is how long the card has been up ("12s elapsed").
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds elapsed", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm elapsed", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh elapsed", int(d.Hours()))
+}
+
+// formatInstallETA renders a short remaining-time phrase.
+func formatInstallETA(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds left", int(d.Seconds()+0.5))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm left", int(d.Minutes()+0.5))
+	}
+	return fmt.Sprintf("%dh left", int(d.Hours()+0.5))
 }
 
 // colorLuma is perceived brightness (0..255), used to keep the card legible.
@@ -722,15 +817,31 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 	// Detail row: bytes (or message) on the left, percent on the right.
 	detailColor := ColorTextSecondary()
 	if detail == "" {
-		detail = "Preparing package"
+		switch phase {
+		case installPhaseDownload:
+			// With or without a Content-Length, say what is known: bytes
+			// received and for how long the run has been going.
+			detail = "Received " + formatInstallBytes(done) + " · " + formatElapsed(age)
+		default:
+			detail = "Preparing package"
+		}
 	}
-	if phase == installPhaseDone {
+	if phase == installPhaseDone && detail == "" {
 		detail = "Ready — restart JukaHub to use it"
 		detailColor = ColorTextSecondary()
 	}
 	detailW := rowRight - textX
-	if phase == installPhaseDownload && total > 0 {
-		pct := fmt.Sprintf("%d%%", int(frac*100+0.5))
+	pct := ""
+	switch phase {
+	case installPhaseDone:
+		pct = "100%"
+	case installPhaseError:
+	default:
+		if total > 0 {
+			pct = formatInstallPercent(done, total, int64(frac*100+0.5))
+		}
+	}
+	if pct != "" {
 		pw, _, _ := titleFont.SizeUTF8(pct)
 		pctW := int32(pw)
 		detailW -= pctW + 12

@@ -766,7 +766,7 @@ func gmetaNewTag() {
 		name := gmetaAddTag(text)
 		if name == "" {
 			if strings.TrimSpace(text) != "" {
-				ShowToast("There are already "+strconv.Itoa(gmetaMaxTags)+" custom tags", ToastKindWarning)
+				ShowToast("There are already "+strconv.Itoa(gmetaMaxTagNames)+" custom tags", ToastKindWarning)
 			}
 			return
 		}

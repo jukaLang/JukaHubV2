@@ -395,6 +395,29 @@ func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRunt
 		d.Env = mergeGameProfileEnv(d.Env, map[string]string{"PATH": strings.TrimSuffix(shellDir+":"+path, ":")})
 	}
 
+	// WestonPack's own modules link libjpeg.so.8, the one library its image
+	// leaves to the firmware and a stock TrimUI does not have: Weston then stops
+	// at the first module it cannot load, before the program's script runs, and
+	// every launch ends as "Weston stopped while it was starting"
+	// (wine_weston_libs.go). The stand-in goes last on the session's library
+	// path, so a firmware that carries the real library keeps it.
+	if libDir, unavailable, libErr := westonEnsureWestonLibs(filepath.Dir(wrapper), words, d.Env, log); libErr != nil {
+		log.printf("display: WestonPack's libraries: %v\n", libErr)
+	} else {
+		if libDir != "" {
+			path, _ := childEnvLookup(d.Env, "LD_LIBRARY_PATH")
+			if path == "" {
+				path = libDir
+			} else {
+				path += ":" + libDir
+			}
+			d.Env = mergeGameProfileEnv(d.Env, map[string]string{"LD_LIBRARY_PATH": path})
+		}
+		if len(unavailable) > 0 {
+			log.printf("display: WestonPack's Weston links %s and this firmware has no copy of it\n", strings.Join(unavailable, ", "))
+		}
+	}
+
 	// Crusty draws the pointer itself (CRUSTY_SHOW_CURSOR); the program gets the
 	// switch as well, for the mode where Crusty runs inside it. WestonPack 0.2.7
 	// concatenates its app words and evals them. Give it only /bin/sh and a
@@ -599,6 +622,12 @@ func westonWrapperEnv(base []string, w, h int, home string, overrides map[string
 		"DEVICE_NAME": westonDeviceName(),
 		"DEVICE_ARCH": westonArch(),
 		"ESUDO":       "",
+		// westonwrap.sh 0.2.7.1 asks `[ "$WP_32BIT" -eq 1 ]` before it says
+		// which of its two copies it runs. PortMaster's control.txt sets it,
+		// and the stand-in JukaHub gives it does not, so every session put
+		// "westonwrap.sh: line 95: [: : integer expression expected" in the
+		// app's log. JukaHub's Wine is 64-bit only.
+		"WP_32BIT": "0",
 	}
 	if home != "" {
 		share := filepath.Join(home, ".local", "share")

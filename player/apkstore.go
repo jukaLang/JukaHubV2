@@ -1544,7 +1544,8 @@ func apkStoreRebuildText() {
 	if src == "" {
 		src = "built in"
 	}
-	ui.catalogNote = "Known native games and native APKs on your card are listed even when AndroidRT cannot add them. Catalogue: " + src + "."
+	ui.catalogNote = "Known native games and native APKs on your card are listed even when AndroidRT cannot add them. Catalogue: " + src +
+		" · " + pluralizeCount(len(ui.catalog.Entries), "listed app", "listed apps") + "."
 }
 
 // apkStoreHeaderStatus is the read-out opposite the title.

@@ -95,7 +95,7 @@ func devOptionsSettingsSection() setSection {
 					if IsTrimuiDevice() {
 						return "One zip in " + devLogsFolder + " on the card · names and networks masked"
 					}
-					return "One zip in the app's log folder · names and networks masked"
+					return "One zip in " + logsFolderSummary() + " · names and networks masked"
 				},
 				Open: devOptionsCopyLogs,
 			},

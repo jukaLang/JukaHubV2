@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **125**.
+Open tasks: **118**.
 
 Open work an agent can finish and check without a person at the device —
 builds, tests, static checks, scripted probes, screenshots it can read — plus
@@ -27,20 +27,6 @@ integrity, security, installers and outside parsers. See
 
 ## Mail and calendar (MAIL)
 
-### MAIL-2 — Calendars that write back (P2, L) [NET]
-**Where.** `calsync_caldav.go` (PUT/DELETE of a VEVENT with If-Match),
-`mail_msauth.go` (a Graph `Calendars.ReadWrite` scope), `calendarpopover.go`.
-**Done when.** The clock's calendar can add an event (title, day, time) to a
-CalDAV calendar or a Microsoft account's calendar through Graph, edit and
-delete one it shows, and a conflicting ETag reloads instead of overwriting.
-
-### MAIL-3 — Push mail with IMAP IDLE (P2, M)
-**Where.** `mail_imap.go`, `mail_sync.go`.
-**Done when.** With JukaHub in the foreground and the server advertising IDLE,
-one connection per enabled account waits in IDLE (renewed every 25 min,
-dropped on sleep and restored on wake) and a new message notifies within
-seconds; polling remains the fallback.
-
 ### MAIL-4 — HTML mail through the browser engine (P3, M)
 **Where.** `mail_ui.go`, `mail_mime.go`, the browser engine (`webdom*.go`,
 `browser.go`).
@@ -52,16 +38,6 @@ one press away.
 ---
 
 ## Performance and graphics (PERF, GPU)
-
-### PERF-3 — Dirty-frame presentation (P1, M)
-**Where.** The `main.go` loop, `adaptive.go`, the toast, download and clock
-paths.
-**Done when.** A frame is drawn and presented only when something changed
-(input, scene or overlay, toast, progress, clock minute, video frame,
-animation, network status), plus a 1 Hz safety redraw; nothing looks stale.
-**Verify.** A test of the redraw decision: idle asks for at most a frame a
-second; input, a scene change, a toast, a progress tick or a clock minute ask
-for one at once.
 
 ### PERF-7 — Trim heavy dependencies (P2, L) [WIN]
 **Where.** goja (the Browser's DOM pass: `webdom*.go`, `webscript.go`),
@@ -165,13 +141,6 @@ package through an exported entry point or a build tag).
 scene and the main Go pages at 1280×720 and 960×720 (SDL dummy driver, software
 renderer) in under a minute.
 **Verify.** The PNGs exist and look right; `docs/DEVELOPMENT.md` documents it.
-
-### TEST-2 — Tests for the riskiest paths the cut left uncovered (P1, M)
-**Done when.** One fast table test each for: the self-update restart handshake
-(`patch_swap.go` markers ↔ `launch.sh` protocol), browser cookie "forget" taking
-the `.bak` with it (`browsercookies*.go`), and the Wi-Fi supplicant socket
-transport (`wifi_ctrl.go`, stubbed socket).
-**Verify.** `go test -run` for the three; total suite time stays under ~10 s.
 
 ### TEST-8 — Fuzz the parsers in package main (P2, M)
 **Where.** `weekly.yml` (`fuzz` covers `internal/jdelta` and
@@ -312,13 +281,6 @@ not guess build steps.
 
 ## Game library (LIB)
 
-### LIB-3 — Collections that build themselves (P1, M)
-**Where.** `hometabs_collections.go`, `gmeta_dat.go`, `game_library_ui.go`.
-**Done when.** Smart collections — by genre, by decade, by player count (from
-`gmeta_dat.go` metadata) — join the automatic three; the Games library shows the
-same collections as Home (one store, `collections.json`); Settings can hide the
-automatic ones; the 32-tag limit becomes a bounded list per collection.
-
 ### LIB-5 — Videos and manuals per game (P2, M) [NET]
 **Where.** `artwork_screenscraper.go` (box art and details for a signed-in
 user), `artstyle_fetch.go` (snaps and title screens), `gmeta_ui.go`, the PDF
@@ -326,17 +288,19 @@ reader, `cachebudget.go`.
 **Done when.** With a ScreenScraper account a game's video and manual are
 fetched on request, the manual opens in the PDF reader, and both stay inside
 the cache budget.
+**Blocked (owner credential).** The first criterion — "With a ScreenScraper
+account" — needs the owner's ScreenScraper login (the account's `devid`/
+`devpassword` for the API, and a member account, since videos are served to
+signed-in members) which no agent has. It cannot be skipped and passed: the
+videos and manuals exist only behind that authenticated API, so there is
+nothing to fetch, open or measure against the cache budget without it. Left
+open for the owner.
 
 ### LIB-12 — RetroAchievements: the game's list, and the key (P2, M) [NET]
 **Where.** `retroachievements.go`, `raach_settings.go` (hardcore and the other
 switches), `raach_unlocks.go` (the LED flash on unlock), `gmeta_ui.go`.
 **Done when.** A game's page lists its achievements with the player's
 progress, and the RetroAchievements key is kept in the secret store (SEC-8).
-
-### LIB-13 — Playtime you can trust (P2, M)
-**Done when.** Sessions are appended to their own bounded log keyed by content
-hash; 400 days are kept; Wrapped covers a year; muOS-style export (CSV/HTML) to
-the card; the user config is no longer rewritten for playtime.
 
 ### LIB-15 — A game page worth opening (P2, M)
 **Done when.** The game page (`gmeta_ui.go`) shows the hero art, description,
@@ -913,12 +877,6 @@ JukaHub Mouse device, and the pad is the mouse again afterwards.
 
 ## Windows desktop (DESK)
 
-### DESK-1 — No console window, a real log (P1, S) [WIN]
-**Done when.** Release builds are GUI-subsystem; WARN+ lines are appended to
-`%LOCALAPPDATA%\JukaHub\logs\errors.txt` with the handheld's 1 MiB rotation;
-Report a bug and Diagnostics name the folder; Settings → Help → "Open logs
-folder".
-
 ### DESK-2 — Sharp on high-DPI screens (P1, S) [WIN]
 **Done when.** Per-monitor-v2 awareness (manifest in `JukaHub.rc` +
 hint), rendering at native pixels with the logical canvas scaled by SDL; text
@@ -1031,8 +989,8 @@ are rough.
   console (XL). (Paint already draws pixel art.)
 - **Per-game colour filters** (S, muOS has them): a colour matrix per game on
   top of the accessibility palettes.
-- **"Play style" profile** (S): when and what you play, from LIB-13's session
-  log.
+- **"Play style" profile** (S): when and what you play, from the playtime
+  session log.
 - **Tabs Home extras** (S each): an unread dot on the tab that holds Chat; a
   per-tab accent tint of the strip's pill; each tab's scroll kept across
   restarts; hold A on the strip to arrange; a crossfade between tabs under

@@ -210,6 +210,18 @@ func downloadFileWithProgressCtx(ctx context.Context, url, dest string, progress
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	const maxDownload = int64(512 << 20)
+	part := dest + ".part"
+	// A helper install on handheld Wi-Fi often drops mid-file. Keep the bytes
+	// already fetched in a .part beside the destination and ask for the rest
+	// with a Range, the way the patch downloader has always done.
+	var offset int64
+	if info, err := os.Stat(part); err == nil && info.Mode().IsRegular() && info.Size() > 0 && info.Size() <= maxDownload {
+		offset = info.Size()
+	} else if info != nil {
+		_ = os.Remove(part)
+	}
+
 	// ytTransport is the default transport unless the firmware has no
 	// certificate store, when it trusts the bundle JukaHub can find
 	// (bugrepCAPaths: cacert.pem next to the app first). The install card's
@@ -219,46 +231,76 @@ func downloadFileWithProgressCtx(ctx context.Context, url, dest string, progress
 	if err != nil {
 		return err
 	}
+	if offset > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	appending := resp.StatusCode == http.StatusPartialContent && offset > 0
+	if resp.StatusCode != http.StatusOK && !appending {
 		return fmt.Errorf("download %s: unexpected status %d", url, resp.StatusCode)
 	}
-	const maxDownload = int64(512 << 20)
 	total := resp.ContentLength
+	if appending {
+		total += offset
+	}
 	if total > maxDownload {
 		return fmt.Errorf("download %s: declared size %d exceeds %d bytes", url, total, maxDownload)
 	}
-	rate := io.LimitReader(resp.Body, maxDownload+1)
-	out, err := os.Create(dest)
+	rate := io.LimitReader(resp.Body, maxDownload-offset+1)
+	out, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	rw := &ioWriteCloserNW{w: out}
-	// Copy with a hard cap, reporting progress as bytes stream in.
-	n, err := io.Copy(rw, &progressReader{r: rate, total: total, fn: progress})
-	if err != nil {
+	if appending {
+		if err := out.Truncate(offset); err != nil {
+			out.Close()
+			return err
+		}
+		if _, err := out.Seek(offset, io.SeekStart); err != nil {
+			out.Close()
+			return err
+		}
+	} else if err := out.Truncate(0); err != nil {
 		out.Close()
-		_ = os.Remove(dest)
+		return err
+	}
+	// A dropped connection keeps the bytes for the next attempt, fresh start
+	// or resume alike. Validation failures clear them below.
+	keepPart := true
+	defer func() {
+		out.Close()
+		if !keepPart {
+			_ = os.Remove(part)
+		}
+	}()
+	rw := &ioWriteCloserNW{w: out}
+	// Report the whole file, including bytes a previous attempt already kept.
+	n, err := io.Copy(rw, &progressReader{r: rate, total: total, fn: progress, done: offset})
+	if err != nil {
 		return fmt.Errorf("download %s: write failed: %w", url, err)
 	}
 	if err := out.Close(); err != nil {
-		_ = os.Remove(dest)
 		return fmt.Errorf("download %s: close failed: %w", url, err)
 	}
-	if n > maxDownload {
-		_ = os.Remove(dest)
+	if offset+n > maxDownload {
+		keepPart = false
 		return fmt.Errorf("download %s exceeds %d bytes", url, maxDownload)
 	}
-	if n < 4096 {
-		_ = os.Remove(dest)
-		return fmt.Errorf("download %s is suspiciously small (%d bytes)", url, n)
+	if offset+n < 4096 {
+		keepPart = false
+		return fmt.Errorf("download %s is suspiciously small (%d bytes)", url, offset+n)
 	}
+	if err := os.Rename(part, dest); err != nil {
+		keepPart = true
+		return err
+	}
+	keepPart = false
 	if progress != nil {
-		progress(n, n)
+		progress(offset+n, offset+n)
 	}
 	return nil
 }

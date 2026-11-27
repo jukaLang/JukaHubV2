@@ -189,6 +189,11 @@ func TestBackupMergeUsesLiveSettingsAndPlaytime(t *testing.T) {
 	if current.Variables.Custom["theme_preset"] != "Live" || current.Variables.Volume != 42 || current.Favorites == nil {
 		t.Fatalf("current settings came from the boot cache: %+v", current)
 	}
+	// Playtime is its own file now: a backup's user config must not carry it,
+	// or a restore would put a stale snapshot back where nothing reads it.
+	if _, ok := current.Variables.Custom[playtimeCustomKey]; ok {
+		t.Fatal("the backup still carries playtime inside the user config")
+	}
 	backup := &UserConfig{Variables: UserVariables{Custom: map[string]interface{}{
 		"theme_preset": "Restored", playtimeCustomKey: map[string]interface{}{"total": float64(1)},
 	}}}
@@ -197,15 +202,11 @@ func TestBackupMergeUsesLiveSettingsAndPlaytime(t *testing.T) {
 	if merged.Variables.Custom["theme_preset"] != "Restored" {
 		t.Fatalf("restored theme = %v", merged.Variables.Custom["theme_preset"])
 	}
-	if got := merged.Variables.Custom[playtimeCustomKey].(map[string]interface{})["total"]; got != float64(77) {
-		t.Fatalf("live playtime was lost: %v", got)
+	if _, ok := merged.Variables.Custom[playtimeCustomKey]; ok {
+		t.Fatalf("a settings restore put a playtime snapshot back into the config: %v", merged.Variables.Custom[playtimeCustomKey])
 	}
 	if _, ok := merged.Variables.Custom["recently_played"]; !ok || merged.Favorites == nil {
 		t.Fatal("the current library was lost during a settings-only restore")
-	}
-	playtime.data.Total = 88
-	if got := merged.Variables.Custom[playtimeCustomKey].(map[string]interface{})["total"]; got != float64(77) {
-		t.Fatalf("the restore snapshot still shares live playtime: %v", got)
 	}
 }
 
@@ -333,8 +334,11 @@ func TestConfigHistoryRestoreSurvivesExitSaves(t *testing.T) {
 	if !live.Variables.ReducedMotion || live.Variables.Custom["theme_preset"] != "Snapshot" {
 		t.Fatalf("running settings did not receive the snapshot: %+v", live.Variables)
 	}
-	if playtime.data.Total != 7 {
-		t.Fatalf("playtime still holds the old session: %d", playtime.data.Total)
+	if playtime.data.Total != 99 {
+		// Playtime is its own file (LIB-13), so a settings snapshot neither
+		// brings playtime in nor drops the session that is running: the 99 is
+		// the live one, and the snapshot's legacy 7 is only to be deleted.
+		t.Fatalf("a settings restore changed the running playtime to %d", playtime.data.Total)
 	}
 	// The two writes at exit used to put the old session back over a restore.
 	playtimeFlush(live)
@@ -350,9 +354,10 @@ func TestConfigHistoryRestoreSurvivesExitSaves(t *testing.T) {
 	if !got.Variables.ReducedMotion || got.Variables.Custom["theme_preset"] != "Snapshot" {
 		t.Fatalf("exit save overwrote the restored settings: %+v", got.Variables)
 	}
-	pt := got.Variables.Custom[playtimeCustomKey].(map[string]interface{})
-	if pt["total"].(float64) < 7 || pt["total"].(float64) >= 99 {
-		t.Fatalf("exit save overwrote restored playtime: %v", pt["total"])
+	if _, ok := got.Variables.Custom[playtimeCustomKey]; ok {
+		// The snapshot is playtime.json now; the exit save must not put it back
+		// into the user config (LIB-13).
+		t.Fatalf("the exit save wrote playtime into the user config: %v", got.Variables.Custom[playtimeCustomKey])
 	}
 }
 
@@ -404,7 +409,7 @@ func TestSectionSaveKeepsTheNewestSettings(t *testing.T) {
 	// A full save from the live config, then a favourites save.
 	live := &Config{}
 	live.Variables.Custom = map[string]interface{}{
-		"theme_preset": "Midnight", playtimeCustomKey: map[string]interface{}{"total": float64(99)},
+		"theme_preset": "Midnight",
 	}
 	saveUserConfig(userConfigFromVariables(live))
 	userConfigCache.Favorites = &FavoritesStore{Videos: []FavoriteItem{{Type: "video"}, {Type: "video"}}}
@@ -413,8 +418,10 @@ func TestSectionSaveKeepsTheNewestSettings(t *testing.T) {
 	if got.Variables.Custom["theme_preset"] != "Midnight" {
 		t.Fatalf("a section save put back theme %v", got.Variables.Custom["theme_preset"])
 	}
-	if pt, _ := got.Variables.Custom[playtimeCustomKey].(map[string]interface{}); pt == nil || pt["total"] != float64(99) {
-		t.Fatalf("a section save put back playtime %v", got.Variables.Custom[playtimeCustomKey])
+	if _, ok := got.Variables.Custom[playtimeCustomKey]; ok {
+		// Playtime has its own files (LIB-13): nothing in a save path writes
+		// it into the user config any more.
+		t.Fatalf("a save put playtime into the config: %v", got.Variables.Custom[playtimeCustomKey])
 	}
 	if got.Favorites == nil || len(got.Favorites.Videos) != 2 {
 		t.Fatal("the section save lost its own section")

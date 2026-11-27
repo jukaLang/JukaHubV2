@@ -179,7 +179,7 @@ func bugrepRenderScreen(renderer *sdl.Renderer, config *Config) {
 	y += toggleH + 10
 	logRect := sdl.Rect{X: x, Y: y, W: w - pw - 12, H: toggleH}
 	bugrepDrawToggleRow(renderer, config, fonts, scr(logRect), "Include recent log (redacted)",
-		"The last few hundred lines, with credentials and personal details removed", form.Log, nav.focused("log"))
+		bugrepLogToggleDetail(), form.Log, nav.focused("log"))
 	nav.add("log", logRect, row, false)
 	row++
 	y += toggleH + 22

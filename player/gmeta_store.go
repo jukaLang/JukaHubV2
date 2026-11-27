@@ -33,15 +33,26 @@ const (
 	gmetaTagPlaying   = "Playing"
 	gmetaTagCompleted = "Completed"
 	gmetaTagBacklog   = "Backlog"
+	gmetaTagWishlist  = "Wishlist"
+	gmetaTagDropped   = "Dropped"
 )
 
-var gmetaBuiltinTags = []string{gmetaTagFavorite, gmetaTagPlaying, gmetaTagCompleted, gmetaTagBacklog}
+var gmetaBuiltinTags = []string{
+	gmetaTagFavorite, gmetaTagPlaying, gmetaTagCompleted, gmetaTagBacklog,
+	gmetaTagWishlist, gmetaTagDropped,
+}
 
-// gmetaMaxTags bounds the custom tags, gmetaMaxText a description or a note.
+// gmetaMaxTagNames bounds the custom-tag directory, gmetaMaxText a description
+// or a note. The directory is not a cap on collections: Home's and the Games
+// library's collections are their own bounded lists (100 collections of 500
+// items, homeTabsColMax and homeTabsColItemsMax) and never ride on a tag. The
+// old 32-name ceiling stopped a 33rd tag from existing at all, which read as a
+// collection that vanished; 512 names still keeps the file and the sheet
+// bounded.
 const (
-	gmetaMaxTags    = 32
-	gmetaMaxText    = 2000
-	gmetaMaxTagName = 24
+	gmetaMaxTagNames = 512
+	gmetaMaxText     = 2000
+	gmetaMaxTagName  = 24
 )
 
 // gmetaRecord is one game's metadata.
@@ -414,6 +425,21 @@ func gmetaHasTag(rec gmetaRecord, tag string) bool {
 	return gmetaContains(rec.Tags, tag)
 }
 
+// gmetaStatus is the one status a game's card shows. A game can carry several
+// tags, so the most active one wins: Playing, Backlog, Wishlist, Dropped,
+// Completed, then Favorite. "" means the game has no status yet.
+func gmetaStatus(rec gmetaRecord) string {
+	for _, tag := range []string{
+		gmetaTagPlaying, gmetaTagBacklog, gmetaTagWishlist, gmetaTagDropped,
+		gmetaTagCompleted, gmetaTagFavorite,
+	} {
+		if gmetaHasTag(rec, tag) {
+			return tag
+		}
+	}
+	return ""
+}
+
 // gmetaAllTags is every tag the sheet offers: the built-in four, then the
 // custom ones in the order they were made.
 func gmetaAllTags() []string {
@@ -443,7 +469,7 @@ func gmetaAddTag(name string) string {
 			return t
 		}
 	}
-	if len(gmetaStore.tags) >= gmetaMaxTags {
+	if len(gmetaStore.tags) >= gmetaMaxTagNames {
 		gmetaStore.mu.Unlock()
 		return ""
 	}
@@ -577,6 +603,51 @@ func gmetaSetTag(system, title, tag string, on bool) gmetaRecord {
 	})
 }
 
+// gmetaStatusTags are the tags that describe where a game stands. Favorite
+// is not one: it can sit on top of any status.
+var gmetaStatusTags = []string{
+	gmetaTagBacklog, gmetaTagPlaying, gmetaTagWishlist, gmetaTagDropped, gmetaTagCompleted,
+}
+
+// gmetaIsStatusTag reports whether a tag is a status rather than a custom tag
+// or Favorite.
+func gmetaIsStatusTag(tag string) bool {
+	for _, want := range gmetaStatusTags {
+		if strings.EqualFold(tag, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// gmetaSetStatus makes one status exclusive on a game, leaving its other tags
+// and Favorite alone. The first time a game becomes Completed is stamped, so
+// Beaten this year can find it later.
+func gmetaSetStatus(system, title, status string) gmetaRecord {
+	status = gmetaCleanTag(status)
+	if !gmetaIsStatusTag(status) {
+		status = ""
+	}
+	return gmetaUpdate(system, title, func(rec *gmetaRecord) {
+		kept := rec.Tags[:0]
+		for _, tag := range rec.Tags {
+			if !gmetaIsStatusTag(tag) {
+				kept = append(kept, tag)
+			}
+		}
+		rec.Tags = kept
+		if status != "" {
+			rec.Tags = append(rec.Tags, status)
+		}
+		if status == gmetaTagCompleted && strings.TrimSpace(rec.Milestones[gmetaMilestoneCompleted]) == "" {
+			if rec.Milestones == nil {
+				rec.Milestones = map[string]string{}
+			}
+			rec.Milestones[gmetaMilestoneCompleted] = gmetaStamp()
+		}
+	})
+}
+
 // gmetaTaggedPaths is the set of library paths whose game carries tag.
 func gmetaTaggedPaths(systems []librarySystem, tag string) map[string]bool {
 	out := map[string]bool{}
@@ -635,7 +706,7 @@ func gmetaFilterLibrary(systems []librarySystem, paths map[string]bool) []librar
 		if len(games) == 0 {
 			continue
 		}
-		out = append(out, librarySystem{Name: system.Name, Games: games, WithArt: countCoveredGames(games)})
+		out = append(out, librarySystem{Name: system.Name, Games: games, WithArt: countCoveredGames(games), Collection: system.Collection})
 	}
 	return out
 }

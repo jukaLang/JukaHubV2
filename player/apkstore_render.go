@@ -72,19 +72,43 @@ func apkStoreRender(renderer *sdl.Renderer, config *Config) {
 func apkStoreDrawTabs(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame tbxFrame, top int32) int32 {
 	nav := &apkStoreUI.nav
 	x := frame.x
+	var active sdl.Rect
 	for i := 0; i < apkTabCount; i++ {
 		label := apkStoreUI.tabLabels[i]
 		if label == "" {
 			label = apkStoreTabNames[i]
 		}
-		w := tbxButtonWidth(fonts.body, label, 132)
+		w := tbxButtonWidth(fonts.body, label, 120)
+		// Tabs used to run past the card edge and under Rescan on a narrow
+		// screen. Give the last one the room that is left and shorten its
+		// label; a tab always stays a pressable button.
+		if limit := frame.x + frame.w - 120; x+w > limit {
+			avail := limit - x
+			if avail < 64 {
+				avail = frame.x + frame.w - x
+			}
+			if avail < 40 {
+				break
+			}
+			w = avail
+			label = ellipsize(fonts.body, label, w-16)
+		}
 		id := apkStoreTabIDs[i]
 		rect := sdl.Rect{X: x, Y: 0, W: w, H: apkStoreTabH}
 		screen := rect
 		screen.Y += top
-		tbxDrawButton(renderer, config, fonts.body, screen, label, i == apkStoreUI.tab, nav.focused(id), false)
+		on := i == apkStoreUI.tab
+		tbxDrawButton(renderer, config, fonts.body, screen, label, on, nav.focused(id), false)
+		if on {
+			active = screen
+		}
 		nav.add(id, rect, 0, false)
 		x += w + 10
+	}
+	// An underline makes the open tab readable at a glance even on a theme
+	// where the button's selected tint is close to the panel colour.
+	if active.W > 0 {
+		drawTabUnderline(renderer, active)
 	}
 	label := "Rescan"
 	disabled := apkStoreUI.scanning
@@ -96,15 +120,22 @@ func apkStoreDrawTabs(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fr
 		label = "Reading…"
 	}
 	w := tbxButtonWidth(fonts.body, label, 120)
+	row := 0
 	if right := frame.x + frame.w - w; right > x {
-		rect := sdl.Rect{X: right, Y: 0, W: w, H: apkStoreTabH}
-		screen := rect
-		screen.Y += top
-		tbxDrawButton(renderer, config, fonts.body, screen, label, false, nav.focused("rescan"), disabled)
-		nav.add("rescan", rect, 0, disabled)
+		x = right
+	} else {
+		// No room beside the tabs: Rescan moves to its own row instead of
+		// disappearing, so a narrow screen can still start a scan.
+		row, x = 1, frame.x
 	}
-	nav.extend(apkStoreTabH)
-	return apkStoreTabH + 18
+	rect := sdl.Rect{X: x, Y: int32(row) * (apkStoreTabH + 8), W: w, H: apkStoreTabH}
+	screen := rect
+	screen.Y += top
+	tbxDrawButton(renderer, config, fonts.body, screen, label, false, nav.focused("rescan"), disabled)
+	nav.add("rescan", rect, row, disabled)
+	tabH := apkStoreTabH*int32(row+1) + 8*int32(row)
+	nav.extend(tabH)
+	return tabH + 18
 }
 
 // apkStoreDrawNote draws one quiet line at body y and returns the y below it.

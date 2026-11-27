@@ -822,7 +822,11 @@ func mediaHubDrawRows(renderer *sdl.Renderer, config *Config, rect sdl.Rect, onl
 			if activeRow {
 				ink = ColorTextPrimary()
 			}
-			drawText(renderer, headFont, row.title, rect.X+2, y, ink, textAlignLeft)
+			heading := row.title
+			if len(row.cards) > 0 {
+				heading += " · " + pluralizeCount(len(row.cards), "video", "videos")
+			}
+			drawText(renderer, headFont, heading, rect.X+2, y, ink, textAlignLeft)
 			if row.kind == mediaRowRecentSearch {
 				mediaHubDrawChipRow(renderer, chipFont, row, i, sdl.Rect{X: rect.X, Y: y + headH, W: rect.W, H: chipH}, activeRow)
 			} else if len(row.cards) == 0 {
@@ -963,9 +967,9 @@ func mediaHubDrawGrid(renderer *sdl.Renderer, config *Config, rect sdl.Rect, onl
 	}
 	if t == mediaTabSearch && headFont != nil {
 		// What the grid is showing, above it.
-		label := "Results"
+		label := "Results · " + pluralizeCount(len(mediaHub.cards), "video", "videos")
 		if mediaHub.localSearch {
-			label = "In your downloads"
+			label = "In your downloads · " + pluralizeCount(len(mediaHub.cards), "video", "videos")
 		}
 		lw, _ := measureText(headFont, label)
 		drawText(renderer, headFont, label, rect.X+2, rect.Y, ColorTextTertiary(), textAlignLeft)

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -27,8 +28,9 @@ func downloadsTestReset(t *testing.T) {
 	downloads.items = nil
 	downloads.nextID = 0
 	downloads.paused = false
-	downloads.running = false
-	downloads.cancel = nil
+	downloads.workers = 0
+	downloads.cancels = nil
+	downloads.sidecarCancel = nil
 	downloads.sidecars = nil
 	downloads.sidecarID = 0
 	downloads.sidecarPath = ""
@@ -54,12 +56,13 @@ func downloadsTestReset(t *testing.T) {
 		waitForDownload(t, "the worker to stop", func() bool {
 			downloads.mu.Lock()
 			defer downloads.mu.Unlock()
-			return !downloads.running
+			return downloads.workers == 0
 		})
 		downloads.mu.Lock()
 		downloads.items = nil
 		downloads.paused = false
-		downloads.cancel = nil
+		downloads.cancels = nil
+		downloads.sidecarCancel = nil
 		downloads.sidecars = nil
 		downloads.sidecarID = 0
 		downloads.sidecarPath = ""
@@ -428,10 +431,21 @@ func TestDownloadSubtitleStepsWaitForAnIdleQueue(t *testing.T) {
 	}
 	downloadSetPaused(false)
 	waitForDownload(t, "both subtitle steps", func() bool { return len(f.snapshot()) >= 4 })
-	got := strings.Join(f.snapshot(), ", ")
-	want := "transfer 1, transfer 2, subtitles clip1.mp4, subtitles clip2.mp4"
-	if got != want {
-		t.Fatalf("order = %s\nwant    %s", got, want)
+	// Two workers may finish in either order; what matters is that both
+	// transfers come before either subtitle step.
+	got := f.snapshot()
+	if len(got) != 4 {
+		t.Fatalf("events = %v", got)
+	}
+	for i := 0; i < 2; i++ {
+		if !strings.HasPrefix(got[i], "transfer ") {
+			t.Fatalf("a subtitle step ran before both transfers: %v", got)
+		}
+	}
+	for i := 2; i < 4; i++ {
+		if !strings.HasPrefix(got[i], "subtitles ") {
+			t.Fatalf("a subtitle step was missing: %v", got)
+		}
 	}
 }
 
@@ -504,13 +518,51 @@ func TestDownloadRemoveStopsItsSubtitleStep(t *testing.T) {
 	waitForDownload(t, "the worker to stop", func() bool {
 		downloads.mu.Lock()
 		defer downloads.mu.Unlock()
-		return !downloads.running
+		return downloads.workers == 0
 	})
 	if got := f.snapshot(); len(got) != 2 {
 		t.Fatalf("events = %v; a removed video's subtitles must not be fetched again", got)
 	}
 	if regularFile(filepath.Join(downloadsVideoDir(), "clip1.mp4")) {
 		t.Fatal("the removed video stayed on the card")
+	}
+}
+
+func TestDownloadsFetchTwoFilesAtOnce(t *testing.T) {
+	downloadsTestReset(t)
+	var active, peak atomic.Int32
+	release := make(chan struct{})
+	downloadRunner = func(ctx context.Context, job downloadJob, progress func(downloadProgress)) (downloadResult, error) {
+		n := active.Add(1)
+		for {
+			old := peak.Load()
+			if n <= old || peak.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		defer active.Add(-1)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return downloadResult{}, errors.New("test runner")
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := downloadEnqueueKind(fmt.Sprintf("https://example.com/clip%d", i), downloadKindVideo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitForDownload(t, "two workers to start their files", func() bool {
+		return peak.Load() >= 2
+	})
+	close(release)
+	waitForDownload(t, "the pool to go idle", func() bool {
+		downloads.mu.Lock()
+		defer downloads.mu.Unlock()
+		return downloads.workers == 0
+	})
+	if got := peak.Load(); got != downloadMaxWorkers {
+		t.Fatalf("peak parallel downloads = %d, want %d", got, downloadMaxWorkers)
 	}
 }
 

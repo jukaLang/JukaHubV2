@@ -164,7 +164,7 @@ func uiModeKidSystems(systems []librarySystem) []librarySystem {
 		if len(games) == 0 {
 			continue
 		}
-		out = append(out, librarySystem{Name: system.Name, Games: games, WithArt: countCoveredGames(games)})
+		out = append(out, librarySystem{Name: system.Name, Games: games, WithArt: countCoveredGames(games), Collection: system.Collection})
 	}
 	return out
 }

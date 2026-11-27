@@ -552,37 +552,50 @@ func gmetaCollectionFor(system string) string {
 
 // ── CRC ─────────────────────────────────────────────────────────────────────
 
-// gmetaROMCRCs is a ROM's CRC32 the way the databases may list it: the whole
+// gmetaROMCRCs is romFileCRCs with the metadata lookup's size cap.
+func gmetaROMCRCs(path string) []string {
+	crcs, _ := romFileCRCs(path, gmetaCRCMaxBytes, true)
+	return crcs
+}
+
+// romFileCRCs is a ROM's CRC32 the way the databases may list it: the whole
 // file, and the file without its iNES header or SNES copier header (the sets
 // disagree on which). A zip gives its single ROM's CRC from its directory, and
-// so does a .7z (sevenzip.go). Disc images and anything over gmetaCRCMaxBytes
-// are matched by name instead.
-func gmetaROMCRCs(path string) []string {
+// so does a .7z (sevenzip.go). Disc images and anything over maxBytes are
+// matched by name instead. The bool says whether an answer was obtained: false
+// when the file could not be read or is over the cap. useIndex lets the
+// library index (libindex_crc.go) answer without reading the file again.
+func romFileCRCs(path string, maxBytes int64, useIndex bool) ([]string, bool) {
+	if maxBytes <= 0 {
+		maxBytes = gmetaCRCMaxBytes
+	}
 	// A .7z before the index: an index written before 7z directories were
 	// read holds the CRC of the archive itself, which no database lists.
 	if strings.EqualFold(filepath.Ext(path), ".7z") {
 		if crc, ok := sevenZipROMCRC(path); ok {
-			return []string{fmt.Sprintf("%08X", crc)}
+			return []string{fmt.Sprintf("%08X", crc)}, true
 		}
-		return nil
+		return nil, false
 	}
-	// The library index's background pass keeps them (libindex_crc.go).
-	if crcs, ok := libIndexKnownCRCs(path); ok {
-		return crcs
+	if useIndex {
+		// The library index's background pass keeps them.
+		if crcs, ok := libIndexKnownCRCs(path); ok {
+			return crcs, true
+		}
 	}
 	if strings.EqualFold(filepath.Ext(path), ".zip") {
 		if det := rommDetectZip(path); det.HasCRC {
-			return []string{fmt.Sprintf("%08X", det.CRC)}
+			return []string{fmt.Sprintf("%08X", det.CRC)}, true
 		}
-		return nil
+		return nil, false
 	}
 	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > gmetaCRCMaxBytes {
-		return nil
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > maxBytes {
+		return nil, false
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer f.Close()
 	full := crc32.NewIEEE()
@@ -618,12 +631,12 @@ func gmetaROMCRCs(path string) []string {
 			break
 		}
 		if err != nil {
-			return nil
+			return nil, false
 		}
 	}
 	out := []string{fmt.Sprintf("%08X", full.Sum32())}
 	if skip > 0 {
 		out = append(out, fmt.Sprintf("%08X", bare.Sum32()))
 	}
-	return out
+	return out, true
 }

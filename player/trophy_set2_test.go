@@ -551,6 +551,9 @@ func TestTrophySeedFromHistory(t *testing.T) {
 	}
 	config := &Config{}
 	config.Variables.Custom = map[string]interface{}{playtimeCustomKey: old, trophySeenKey: "0"}
+	// Playtime lives in its own file now: give this test a clean one, so the
+	// legacy key is what playtimeInit has to read.
+	playtimeTestStore(t)
 	playtimeInit(config)
 	d := playtime.data
 	if d.Life.Days != 5 {
@@ -919,6 +922,8 @@ func TestPlaytimeInitMigratesLegacyGames(t *testing.T) {
 	}
 	config := &Config{}
 	config.Variables.Custom = map[string]interface{}{playtimeCustomKey: old, trophySeenKey: "0"}
+	// Its own store: the migration is what this test is about.
+	playtimeTestStore(t)
 	playtimeInit(config)
 	d := playtime.data
 	if len(d.Games) != 2 || d.Games["GBA|Zelda"] != 3000 || d.Games["Tetris"] != 1200 {

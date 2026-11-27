@@ -6,11 +6,11 @@ package main
 // the other half: a small, deliberate queue that saves audio onto the SD card so
 // the audio player keeps working on a train, on a plane, or with Wi-Fi off.
 //
-// One track downloads at a time. The device has 1 GB of shared RAM and a
-// standalone yt-dlp is already a heavy child; running two would starve the UI
-// long before it made anything faster. Pausing cancels the running yt-dlp and
-// puts its row back in the queue, and the partial file is kept so resuming
-// continues instead of starting over.
+// Up to downloadMaxWorkers tracks download at once. The device has 1 GB of
+// shared RAM and a standalone yt-dlp is a heavy child, so the pool is small:
+// two files share the wait without starving the UI. Pausing cancels every
+// yt-dlp in flight; each row goes back to the queue and keeps its partial file
+// so resuming continues instead of starting over.
 //
 // Everything a test needs is a plain function of plain values: the queue walk,
 // the progress parser, the storage split and the file naming. Only the runner
@@ -39,6 +39,12 @@ import (
 // on the card; only the rows are forgotten, so a week of listening cannot turn
 // the list into a second file manager.
 const downloadQueueLimit = 20
+
+// downloadMaxWorkers is how many files the queue fetches at once. Two is
+// deliberate: a handheld's Wi-Fi and SD card are both slow, and one more
+// transfer rarely helps, but a small batch (an album) no longer waits for
+// each file to finish before the next starts.
+const downloadMaxWorkers = 2
 
 // downloadStatus is one row's lifecycle. Queued covers both "waiting" and
 // "paused" because the queue is the same list either way.
@@ -261,12 +267,16 @@ func downloadsValidateSavedFile(path string, kind downloadKind) error {
 
 // downloadQueue is the whole queue. Every field is read and written under mu.
 type downloadQueue struct {
-	mu      sync.Mutex
-	items   []*downloadItem
-	nextID  int64
-	paused  bool
-	running bool
-	cancel  context.CancelFunc
+	mu     sync.Mutex
+	items  []*downloadItem
+	nextID int64
+	paused bool
+	// workers counts the live workers, not a single running flag: up to
+	// downloadMaxWorkers queued files are fetched at once. cancels is per
+	// job, so removing or pausing one row never stops a different transfer.
+	workers       int
+	cancels       map[int64]context.CancelFunc
+	sidecarCancel context.CancelFunc
 	// sidecars are the saved videos whose subtitles are still to be fetched
 	// (downloadsSaveSubtitles). They wait until no transfer is queued, so a
 	// download never waits behind a subtitle fetch; sidecarID is the row
@@ -449,7 +459,7 @@ func (d *downloadQueue) yieldSidecarLocked() context.CancelFunc {
 	if d.sidecarID == 0 {
 		return nil
 	}
-	return d.cancel
+	return d.sidecarCancel
 }
 
 // dropSidecarLocked forgets the waiting subtitle step of a row that is gone.
@@ -527,9 +537,17 @@ func downloadsPaused() bool {
 func downloadSetPaused(paused bool) {
 	downloads.mu.Lock()
 	downloads.paused = paused
-	cancel := downloads.cancel
+	var cancels []context.CancelFunc
+	if paused {
+		for _, cancel := range downloads.cancels {
+			cancels = append(cancels, cancel)
+		}
+		if downloads.sidecarCancel != nil {
+			cancels = append(cancels, downloads.sidecarCancel)
+		}
+	}
 	downloads.mu.Unlock()
-	if paused && cancel != nil {
+	for _, cancel := range cancels {
 		cancel()
 	}
 	if !paused {
@@ -584,7 +602,7 @@ func downloadRemove(id int64) bool {
 		return false
 	}
 	it := downloads.items[idx]
-	cancel := downloads.cancel
+	cancel := downloadsCancelForLocked(id)
 	active := it.Status == downloadActive || it.ID == downloads.sidecarID
 	if it.ID == downloads.sidecarID {
 		downloads.sidecarDropped = true
@@ -632,7 +650,7 @@ func dlCancelTransfer(id int64) (removed, done bool) {
 		downloads.mu.Unlock()
 		return false, true
 	}
-	cancel := downloads.cancel
+	cancel := downloadsCancelForLocked(id)
 	active := it.Status == downloadActive
 	downloads.items = append(downloads.items[:idx], downloads.items[idx+1:]...)
 	downloads.mu.Unlock()
@@ -675,7 +693,7 @@ func dlForgetQueuePath(path string) {
 	}
 	downloads.sidecars = waiting
 	if downloads.sidecarID != 0 && downloads.sidecarPath != "" && dlPathKey(downloads.sidecarPath) == key {
-		stop = downloads.cancel
+		stop = downloads.sidecarCancel
 		downloads.sidecarDropped = true
 	}
 	downloads.mu.Unlock()
@@ -724,46 +742,79 @@ func (d *downloadQueue) trimLocked() {
 	d.items = kept
 }
 
-// downloadsKick starts the worker when it is not already running.
+// downloadsCancelForLocked is the cancel for a job or its subtitle step.
+// downloads.mu must be held.
+func downloadsCancelForLocked(id int64) context.CancelFunc {
+	if id != 0 && id == downloads.sidecarID {
+		return downloads.sidecarCancel
+	}
+	return downloads.cancels[id]
+}
+
+// downloadsKick fills the worker pool up to downloadMaxWorkers. A paused
+// queue starts none; each worker decrements the count on its way out.
 func downloadsKick() {
 	downloads.mu.Lock()
-	if downloads.running || downloads.paused {
+	if downloads.paused {
 		downloads.mu.Unlock()
 		return
 	}
-	downloads.running = true
+	want := downloadMaxWorkers - downloads.workers
+	if want <= 0 {
+		downloads.mu.Unlock()
+		return
+	}
+	downloads.workers += want
 	downloads.mu.Unlock()
-	go downloadsWorker()
+	for i := 0; i < want; i++ {
+		go downloadsWorker()
+	}
 }
 
 func downloadsWorker() {
+	defer func() {
+		downloads.mu.Lock()
+		downloads.workers--
+		// Two idle workers can both see an empty queue and leave at the same
+		// instant, stranding a subtitle step that was queued as the last video
+		// landed. The last one out starts a single worker for those steps.
+		restart := downloads.workers == 0 && !downloads.paused && len(downloads.sidecars) > 0
+		if restart {
+			downloads.workers = 1
+		}
+		downloads.mu.Unlock()
+		if restart {
+			go downloadsWorker()
+		}
+	}()
 	for {
 		downloads.mu.Lock()
 		if downloads.paused {
-			downloads.running = false
 			downloads.mu.Unlock()
 			return
 		}
 		item := downloads.nextQueuedLocked()
 		if item == nil {
-			// The queue is dry: the subtitle steps that waited for it run now,
-			// one at a time, still on this worker, so the handheld never runs
-			// two helpers at once and a transfer never waits behind one.
+			// The queue is dry. Only the last remaining worker runs subtitle
+			// steps, one at a time, so a transfer never waits behind one.
+			if downloads.workers > 1 {
+				downloads.mu.Unlock()
+				return
+			}
 			sub, ok := downloads.nextSidecarLocked()
 			if !ok {
-				downloads.running = false
 				downloads.mu.Unlock()
 				return
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), downloadSidecarTimeout)
-			downloads.cancel = cancel
+			downloads.sidecarCancel = cancel
 			downloads.sidecarID = sub.ID
 			downloads.sidecarPath = sub.Path
 			downloads.sidecarDropped = false
 			downloads.mu.Unlock()
 			err := downloadsSaveSubtitles(ctx, sub)
 			downloads.mu.Lock()
-			downloads.cancel = nil
+			downloads.sidecarCancel = nil
 			downloads.sidecarID = 0
 			downloads.sidecarPath = ""
 			// Cut short by a pause or by a row queued meanwhile — not by its
@@ -781,7 +832,10 @@ func downloadsWorker() {
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		downloads.cancel = cancel
+		if downloads.cancels == nil {
+			downloads.cancels = map[int64]context.CancelFunc{}
+		}
+		downloads.cancels[item.ID] = cancel
 		item.Status = downloadActive
 		item.Err = ""
 		item.Speed = 0
@@ -810,7 +864,7 @@ func downloadsWorker() {
 		cancel()
 
 		downloads.mu.Lock()
-		downloads.cancel = nil
+		delete(downloads.cancels, job.ID)
 		cur := downloads.findLocked(job.ID)
 		if cur == nil {
 			// Removed while it ran: the runner cleaned its own staging folder.

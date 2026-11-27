@@ -46,6 +46,8 @@ const (
 	plugxMaxThemes    = 16
 	plugxMaxProfiles  = 16
 	plugxMaxPacks     = 8
+	// plugxMaxVideoHosts bounds the video sites one plugin may advertise.
+	plugxMaxVideoHosts = 16
 	// plugxMaxMagic and plugxMaxOffset bound a ROM header check: the longest
 	// signature any cartridge format uses is well under 32 bytes, and the
 	// deepest sits a few kilobytes in (the SNES internal header).
@@ -94,17 +96,24 @@ type plugxExtensions struct {
 	Themes        []plugxTheme
 	InputProfiles []string // absolute paths
 	Packs         []string // absolute paths: a folder, a pack.json or another .json manifest
+	VideoHosts    []string // host names yt-dlp sites this plugin knows about
 	Problems      []string // entries that were skipped, and why
 }
 
 // hasAny reports whether the manifest declares any working extension.
 func (e plugxExtensions) hasAny() bool {
-	return len(e.RomParsers) > 0 || len(e.Themes) > 0 || len(e.InputProfiles) > 0 || len(e.Packs) > 0
+	return len(e.RomParsers) > 0 || len(e.Themes) > 0 || len(e.InputProfiles) > 0 ||
+		len(e.Packs) > 0 || len(e.VideoHosts) > 0
 }
 
 var (
 	plugxSystemPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`) })
 	plugxExtPattern    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\.[a-z0-9][a-z0-9_+-]{0,11}$`) })
+	// A host is a host: no scheme, port, path, query or user info. A leading
+	// "*." lets a plugin name a CDN family without claiming every domain.
+	plugxHostPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^(\*\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+	})
 )
 
 // plugxParse reads the typed extension points out of a manifest. dir is the
@@ -161,7 +170,35 @@ func plugxParse(plugin, dir string, data []byte) plugxExtensions {
 			ext.Packs = append(ext.Packs, path)
 		}
 	}
+	if v, ok := raw["videoHosts"]; ok {
+		ext.VideoHosts = plugxParseVideoHosts(v, &ext.Problems)
+	}
 	return ext
+}
+
+// plugxParseVideoHosts validates the site names a plugin says it can download
+// from. A plugin cannot run a command through this list: it is only a host
+// name, used for labels and for the settings read-out, never as an argument.
+func plugxParseVideoHosts(raw json.RawMessage, problems *[]string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i, host := range plugxStringList(raw, "videoHosts", problems) {
+		if i >= plugxMaxVideoHosts {
+			*problems = append(*problems, fmt.Sprintf("videoHosts: only the first %d are used", plugxMaxVideoHosts))
+			break
+		}
+		host = strings.ToLower(strings.TrimSpace(host))
+		if len(host) > 253 || !plugxHostPattern().MatchString(host) {
+			*problems = append(*problems, "video host "+host+": expected a host name such as vimeo.com or *.example.org")
+			continue
+		}
+		if seen[host] {
+			continue
+		}
+		seen[host] = true
+		out = append(out, host)
+	}
+	return out
 }
 
 // plugxStringList accepts a list of strings, or a single string for a list of
@@ -407,6 +444,12 @@ func plugxDescribe(ext plugxExtensions) (string, []string) {
 			lines = append(lines, "Control profile: "+strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
 		}
 	}
+	if n := len(ext.VideoHosts); n > 0 {
+		parts = append(parts, plural(n, "video site", "video sites"))
+		for _, host := range ext.VideoHosts {
+			lines = append(lines, "Video site: "+host+" (yt-dlp)")
+		}
+	}
 	if n := len(ext.Packs); n > 0 {
 		parts = append(parts, plural(n, "experience pack", "experience packs"))
 		for _, path := range ext.Packs {
@@ -442,8 +485,33 @@ func plugxDecorate(row *plugEntry, info PluginInfo, ext plugxExtensions) {
 // read from the library's scan goroutine, so they sit behind a lock; themes are
 // registered into the theme catalogue on the main thread, where it is read.
 var plugxRegistry struct {
-	mu      sync.RWMutex
-	parsers []plugxRomParser
+	mu         sync.RWMutex
+	parsers    []plugxRomParser
+	videoHosts []plugxVideoHost
+}
+
+// plugxVideoHost is one site a switched-on plugin says it knows about.
+type plugxVideoHost struct {
+	Plugin string
+	Host   string
+}
+
+// plugxVideoHosts is the live list for the settings read-out and for download
+// captions. It is a copy: callers must not hold the registry's lock.
+func plugxVideoHosts() []plugxVideoHost {
+	plugxRegistry.mu.RLock()
+	defer plugxRegistry.mu.RUnlock()
+	return append([]plugxVideoHost(nil), plugxRegistry.videoHosts...)
+}
+
+// plugxVideoHostSummary is the string a settings row can show.
+func plugxVideoHostSummary() string {
+	list := plugxVideoHosts()
+	parts := make([]string, 0, len(list))
+	for _, h := range list {
+		parts = append(parts, h.Host+" ("+h.Plugin+")")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // plugxThemeOwners maps every theme id plugx registered to its plugin, so a
@@ -471,10 +539,14 @@ func init() {
 func plugxInstall(config *Config, found []plugxExtensions, catalog []plugEntry) {
 	var parsers []plugxRomParser
 	var packs []xpackPluginRef
+	var hosts []plugxVideoHost
 	for _, ext := range found {
 		parsers = append(parsers, ext.RomParsers...)
 		for _, path := range ext.Packs {
 			packs = append(packs, xpackPluginRef{Plugin: ext.Plugin, Path: path})
+		}
+		for _, host := range ext.VideoHosts {
+			hosts = append(hosts, plugxVideoHost{Plugin: ext.Plugin, Host: host})
 		}
 	}
 	sort.SliceStable(parsers, func(i, j int) bool {
@@ -483,8 +555,15 @@ func plugxInstall(config *Config, found []plugxExtensions, catalog []plugEntry) 
 		}
 		return parsers[i].Name < parsers[j].Name
 	})
+	sort.SliceStable(hosts, func(i, j int) bool {
+		if hosts[i].Host != hosts[j].Host {
+			return hosts[i].Host < hosts[j].Host
+		}
+		return hosts[i].Plugin < hosts[j].Plugin
+	})
 	plugxRegistry.mu.Lock()
 	plugxRegistry.parsers = parsers
+	plugxRegistry.videoHosts = hosts
 	plugxRegistry.mu.Unlock()
 
 	plugxSyncThemes(config, found)

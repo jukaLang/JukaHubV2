@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 380" width="1200" height="380" role="img" aria-labelledby="installTitle installDesc">
+  <title id="installTitle">Installing JukaHub in four steps</title>
+  <desc id="installDesc">Step 1: download JukaHub-Trimui.zip from the Releases page. Step 2: unzip it, which gives one folder. Step 3: drag that folder into the Apps folder on the SD card. Step 4: put the card back, power on and open Apps, then JukaHub.</desc>
+
+  <defs>
+    <marker id="installArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#4b5a75"/>
+    </marker>
+    <style>
+      .num { font: 700 17px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #08130f; }
+      .step { font: 600 20px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #f4f7fb; }
+      .cap { font: 400 15px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #9aa6b6; }
+      .mono { font: 400 13px ui-monospace, 'SF Mono', Menlo, Consolas, monospace; fill: #cfe0f5; }
+      .tiny { font: 600 12px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #7ef0cd; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="380" rx="24" fill="#0b0f18"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="378.5" rx="23.25" fill="none" stroke="#1e2839" stroke-width="1.5"/>
+
+  <line x1="300" y1="44" x2="300" y2="336" stroke="#18202e" stroke-width="1.5"/>
+  <line x1="600" y1="44" x2="600" y2="336" stroke="#18202e" stroke-width="1.5"/>
+  <line x1="900" y1="44" x2="900" y2="336" stroke="#18202e" stroke-width="1.5"/>
+
+  <!-- 1 · Download -->
+  <circle cx="82" cy="58" r="17" fill="#25c2a0"/>
+  <text class="num" x="82" y="64" text-anchor="middle">1</text>
+  <text class="step" x="110" y="65">Download</text>
+
+  <rect x="118" y="100" width="64" height="84" rx="10" fill="#151d2b" stroke="#33415a" stroke-width="1.5"/>
+  <rect x="147" y="108" width="6" height="44" rx="3" fill="#4b5a75"/>
+  <rect x="157" y="114" width="10" height="4" rx="2" fill="#4b5a75"/>
+  <rect x="157" y="126" width="10" height="4" rx="2" fill="#4b5a75"/>
+  <rect x="157" y="138" width="10" height="4" rx="2" fill="#4b5a75"/>
+  <text class="mono" x="136" y="172" text-anchor="middle" style="letter-spacing:1px">ZIP</text>
+
+  <path d="M150 196 V216" stroke="#4b5a75" stroke-width="2" stroke-linecap="round" marker-end="url(#installArrow)"/>
+  <path d="M120 222 v10 a8 8 0 0 0 8 8 h44 a8 8 0 0 0 8 -8 v-10" fill="none" stroke="#4b5a75" stroke-width="2" stroke-linecap="round"/>
+
+  <text class="cap" x="150" y="286" text-anchor="middle">JukaHub-Trimui.zip</text>
+  <text class="cap" x="150" y="308" text-anchor="middle">from the Releases page</text>
+
+  <!-- 2 · Unzip -->
+  <circle cx="382" cy="58" r="17" fill="#25c2a0"/>
+  <text class="num" x="382" y="64" text-anchor="middle">2</text>
+  <text class="step" x="410" y="65">Unzip it</text>
+
+  <rect x="372" y="112" width="42" height="56" rx="7" fill="#151d2b" stroke="#33415a" stroke-width="1.5"/>
+  <rect x="390" y="118" width="5" height="26" rx="2.5" fill="#4b5a75"/>
+  <path d="M420 140 h12" stroke="#4b5a75" stroke-width="2" stroke-linecap="round" marker-end="url(#installArrow)"/>
+
+  <path d="M440 140 v-9 a6 6 0 0 1 6 -6 h34 a6 6 0 0 1 6 6 v9 Z" fill="#26364d" stroke="#3a4a66" stroke-width="1.5"/>
+  <rect x="440" y="140" width="110" height="74" rx="9" fill="#1b2637" stroke="#3a4a66" stroke-width="1.5"/>
+  <text class="mono" x="495" y="184" text-anchor="middle" style="font-size:12px">JukaHub-Trimui</text>
+
+  <text class="cap" x="450" y="286" text-anchor="middle">One folder comes out</text>
+  <text class="cap" x="450" y="308" text-anchor="middle">(the zip holds nothing else)</text>
+
+  <!-- 3 · Copy to Apps -->
+  <circle cx="682" cy="58" r="17" fill="#25c2a0"/>
+  <text class="num" x="682" y="64" text-anchor="middle">3</text>
+  <text class="step" x="710" y="65">Copy it to Apps</text>
+
+  <path d="M668 152 v-9 a6 6 0 0 1 6 -6 h30 a6 6 0 0 1 6 6 v9 Z" fill="#26364d" stroke="#3a4a66" stroke-width="1.5"/>
+  <rect x="668" y="152" width="118" height="72" rx="9" fill="#1b2637" stroke="#3a4a66" stroke-width="1.5"/>
+  <text class="mono" x="684" y="176" style="font-size:14px">Apps</text>
+
+  <path d="M772 182 v-8 a6 6 0 0 1 6 -6 h26 a6 6 0 0 1 6 6 v8 Z" fill="#123028" stroke="#25c2a0" stroke-width="1.5"/>
+  <rect x="772" y="182" width="78" height="58" rx="8" fill="#0f2a22" stroke="#25c2a0" stroke-width="1.5"/>
+  <text class="tiny" x="785" y="208" style="font-size:11px">JukaHub</text>
+
+  <text class="cap" x="750" y="286" text-anchor="middle">Drag the folder into Apps</text>
+  <text class="cap" x="750" y="308" text-anchor="middle">on the card; rename it JukaHub</text>
+
+  <!-- 4 · Power on -->
+  <circle cx="982" cy="58" r="17" fill="#25c2a0"/>
+  <text class="num" x="982" y="64" text-anchor="middle">4</text>
+  <text class="step" x="1010" y="65">Power on</text>
+
+  <rect x="1000" y="104" width="30" height="10" rx="5" fill="#26364d"/>
+  <rect x="1070" y="104" width="30" height="10" rx="5" fill="#26364d"/>
+  <rect x="975" y="112" width="150" height="98" rx="13" fill="#151d2b" stroke="#3a4a66" stroke-width="1.5"/>
+  <rect x="988" y="126" width="86" height="50" rx="4" fill="#071a22" stroke="#1d3b48" stroke-width="1"/>
+  <rect x="994" y="132" width="22" height="16" rx="3" fill="#25c2a0" opacity="0.85"/>
+  <rect x="1020" y="132" width="22" height="16" rx="3" fill="#7c5cff" opacity="0.85"/>
+  <rect x="1046" y="132" width="22" height="16" rx="3" fill="#22d3ee" opacity="0.7"/>
+  <rect x="994" y="152" width="22" height="16" rx="3" fill="#22d3ee" opacity="0.45"/>
+  <rect x="1020" y="152" width="22" height="16" rx="3" fill="#25c2a0" opacity="0.45"/>
+  <rect x="1046" y="152" width="22" height="16" rx="3" fill="#7c5cff" opacity="0.45"/>
+  <circle cx="1094" cy="134" r="5" fill="#4b5a75"/>
+  <circle cx="1106" cy="145" r="5" fill="#4b5a75"/>
+  <circle cx="1094" cy="156" r="5" fill="#4b5a75"/>
+  <circle cx="1082" cy="145" r="5" fill="#4b5a75"/>
+  <circle cx="1031" cy="192" r="3" fill="#33415a"/>
+
+  <text class="mono" x="1050" y="238" text-anchor="middle">Apps → JukaHub</text>
+
+  <text class="cap" x="1050" y="286" text-anchor="middle">Card back in the handheld:</text>
+  <text class="cap" x="1050" y="308" text-anchor="middle">open Apps, pick JukaHub</text>
+</svg>

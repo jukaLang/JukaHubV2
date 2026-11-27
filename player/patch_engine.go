@@ -167,6 +167,10 @@ var allowedPatchHosts = map[string]bool{
 	// The libretro buildbot is where the aarch64 core builds come from
 	// (emulatorupdates.go). Both non-GitHub hosts remain HTTPS-only.
 	"buildbot.libretro.com": true,
+	// The Wine project's own download host, for the optional components a
+	// user lists in data/wine/components.json (wine_components.go). Official
+	// upstream only; every download still needs a SHA-256 in that file.
+	"dl.winehq.org": true,
 }
 
 // validatePatchURL rejects non-HTTPS URLs and URLs whose host is not on the
@@ -1692,6 +1696,33 @@ func fetchBounded(ctx context.Context, client *http.Client, raw string, maxBytes
 // expected SHA-256 when provided ("" skips verification). On failure the
 // partial file is removed. The file is fsynced before the final rename.
 func downloadToFile(ctx context.Context, client *http.Client, raw, dest, expectSHA string, maxBytes int64) error {
+	return downloadToFileProgress(ctx, client, raw, dest, expectSHA, maxBytes, nil)
+}
+
+// progressWriter counts bytes on the way to the file and reports about once
+// per megabyte, so a large download can show progress without a toast per
+// chunk.
+type progressWriter struct {
+	w          io.Writer
+	got, total int64
+	last       int64
+	report     func(got, total int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.got += int64(n)
+	if p.report != nil && (p.got-p.last >= 1<<20 || err != nil) {
+		p.last = p.got
+		p.report(p.got, p.total)
+	}
+	return n, err
+}
+
+// downloadToFileProgress is downloadToFile with an optional progress report.
+// total is the server's Content-Length, or -1 when it did not send one.
+func downloadToFileProgress(ctx context.Context, client *http.Client, raw, dest, expectSHA string, maxBytes int64,
+	report func(got, total int64)) error {
 	if err := validatePatchURL(raw); err != nil {
 		return err
 	}
@@ -1789,8 +1820,19 @@ func downloadToFile(ctx context.Context, client *http.Client, raw, dest, expectS
 		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, raw)
 	}
 
+	total := int64(-1)
+	if resp.ContentLength > 0 {
+		total = offset + resp.ContentLength
+	}
+	writer := io.Writer(out)
+	if report != nil {
+		pw := &progressWriter{w: out, got: offset, total: total, report: report}
+		pw.last = offset
+		writer = pw
+		report(offset, total)
+	}
 	limited := io.LimitReader(resp.Body, maxBytes-offset+1)
-	n, err := io.Copy(out, limited)
+	n, err := io.Copy(writer, limited)
 	if err != nil {
 		keepPart = true
 		return fmt.Errorf("download failed after %s: %w", formatBytes(uint64(offset+n)), err)

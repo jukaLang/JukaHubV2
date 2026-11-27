@@ -47,7 +47,7 @@ const (
 	msTenantDefault = "common"
 	// msScopes are IMAP and SMTP for the signed-in mailbox, a refresh token,
 	// and an ID token naming the address when the caller did not know it.
-	msScopes      = "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid profile"
+	msScopes      = "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send https://graph.microsoft.com/Calendars.ReadWrite offline_access openid profile"
 	msDeviceGrant = "urn:ietf:params:oauth:grant-type:device_code"
 	msLinkURL     = "https://www.microsoft.com/link"
 )
@@ -319,6 +319,12 @@ var msTokens struct {
 	m  map[string]msToken
 }
 
+// msGraphTokens caches access tokens for the Graph calendar scope.
+var msGraphTokens struct {
+	mu sync.Mutex
+	m  map[string]msToken
+}
+
 // errMSSignInExpired is the person's next step when Microsoft refuses the
 // stored sign-in.
 var errMSSignInExpired = &mailError{kind: mailErrAuth, msg: "the Microsoft sign-in expired or was removed — sign in again in Settings → Email & calendar"}
@@ -395,6 +401,69 @@ func mailMSAccessToken(ctx context.Context, a mailcalAccount) (string, error) {
 
 // msForgetToken drops an account's cached access token. Off the main thread:
 // a refresh in flight holds the lock for up to 20 s.
+// mailMSGraphAccessToken is a valid Graph access token (Calendars.ReadWrite) for
+// a Microsoft account, refreshed when it has less than a minute left.
+func mailMSGraphAccessToken(ctx context.Context, a mailcalAccount) (string, error) {
+	msGraphTokens.mu.Lock()
+	defer msGraphTokens.mu.Unlock()
+	if msGraphTokens.m == nil {
+		msGraphTokens.m = map[string]msToken{}
+	}
+	if t, ok := msGraphTokens.m[a.ID]; ok && t.refresh == a.RefreshToken && time.Until(t.expires) > time.Minute {
+		return t.access, nil
+	}
+	refresh := mailcalOpen(a.RefreshToken, "Microsoft refresh token")
+	if refresh == "" {
+		return "", &mailError{kind: mailErrAuth, msg: "the Microsoft sign-in cannot be read on this device — sign in again"}
+	}
+	clientID, tenant := msOAuthCurrent()
+	if clientID == "" {
+		return "", &mailError{kind: mailErrAuth, msg: "this build has no Microsoft sign-in set up (ms_client_id)"}
+	}
+	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	status, data, err := gdrivePostForm(rctx, msEndpoint(tenant, "token"), url.Values{
+		"client_id":     {clientID},
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+		"scope":         {"https://graph.microsoft.com/Calendars.ReadWrite offline_access"},
+	})
+	if err != nil {
+		return "", mailNetErr(err)
+	}
+	ans, err := msParseToken(status, data)
+	var oe *msOAuthError
+	if errors.As(err, &oe) {
+		switch oe.Code {
+		case "invalid_grant", "interaction_required", "unauthorized_client", "invalid_client":
+			logWarn("mail", "Microsoft refused the stored sign-in: %s", oe.Code)
+			delete(msGraphTokens.m, a.ID)
+			return "", errMSSignInExpired
+		}
+		return "", &mailError{kind: mailErrServer, msg: "Microsoft refused: " + oe.Code}
+	}
+	if err != nil {
+		return "", err
+	}
+	stored := a.RefreshToken
+	if ans.RefreshToken != "" && ans.RefreshToken != refresh {
+		if sealed, serr := mailcalSeal(ans.RefreshToken, "Microsoft refresh token"); serr == nil && sealed != "" {
+			_ = mailcalSettingsUpdate(func(s *mailcalSettings) {
+				for i := range s.Accounts {
+					if s.Accounts[i].ID == a.ID && s.Accounts[i].RefreshToken == a.RefreshToken {
+						s.Accounts[i].RefreshToken = sealed
+					}
+				}
+			})
+			if sealed != "" {
+				stored = sealed
+			}
+		}
+	}
+	msGraphTokens.m[a.ID] = msToken{access: ans.AccessToken, refresh: stored, expires: time.Now().Add(time.Duration(ans.ExpiresIn) * time.Second)}
+	return ans.AccessToken, nil
+}
+
 func msForgetToken(id string) {
 	go func() {
 		msTokens.mu.Lock()

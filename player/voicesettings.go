@@ -514,7 +514,8 @@ func voiceThemeOptions(*Config) []setOption {
 func voiceSettingVirtualRows() []voiceSettingCand {
 	dark := setRow{
 		ID: "voiceDarkMode", Label: "Dark mode", Kind: setKindToggle,
-		Get: func(c *Config) bool { return !themePresetIsLight(voiceThemePreset(c)) },
+		Detail: setStatic("Dark ink on a dark surface. Light mode is easier to read in daylight; dark mode is easier on the eyes at night."),
+		Get:    func(c *Config) bool { return !themePresetIsLight(voiceThemePreset(c)) },
 		Set: func(c *Config, on bool) {
 			if on {
 				ApplyThemePreset(c, "dark")
@@ -525,6 +526,7 @@ func voiceSettingVirtualRows() []voiceSettingCand {
 	}
 	theme := setRow{
 		ID: "voiceTheme", Label: "Theme", Kind: setKindChoice,
+		Detail:  setStatic("Colours and fonts for every screen. The gallery has a preview of each; the choice is saved on the device."),
 		Options: voiceThemeOptions,
 		Current: func(c *Config) int {
 			cur := voiceThemePreset(c)
@@ -540,6 +542,7 @@ func voiceSettingVirtualRows() []voiceSettingCand {
 	}
 	wifi := setRow{
 		ID: "voiceWifi", Label: "Wi-Fi", Kind: setKindToggle,
+		Detail:  setStatic("On means the handheld looks for networks. Off saves battery and is what downloads and updates need turned back on."),
 		Visible: setQSAvailable(qsActionWifi),
 		// The switch's last reading: asking the radio runs a command, which
 		// has no place on the render thread for a read-out.
@@ -548,12 +551,14 @@ func voiceSettingVirtualRows() []voiceSettingCand {
 	// Quick Settings' own switches that have no Settings row.
 	quiet := setRow{
 		ID: "voiceQuiet", Label: "Quiet Mode", Kind: setKindToggle, Quiet: true,
+		Detail:  setStatic("Keeps sounds and notifications quiet while a game or video owns the screen. Messages still arrive in the notification centre."),
 		Visible: setQSAvailable(qsActionQuiet),
 		Get:     setQSRead(qsActionQuiet),
 		Set:     setQSWrite(qsActionQuiet),
 	}
 	magnifier := setRow{
 		ID: "voiceMagnifier", Label: "Magnifier", Kind: setKindToggle, Quiet: true,
+		Detail:  setStatic("Makes the pointer magnify what is under it. Useful for small buttons; it does not change the size of menus or text."),
 		Visible: setQSAvailable(qsActionMagnifier),
 		Get:     setQSRead(qsActionMagnifier),
 		Set:     setQSWrite(qsActionMagnifier),

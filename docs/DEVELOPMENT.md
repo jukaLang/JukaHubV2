@@ -754,6 +754,7 @@ Full details: [SECURITY.md](../SECURITY.md).
 | `player/build.bat` | Windows build wrapper (toolchain check, SDL2 staging) |
 | `player/package-sdcard.sh` | TrimUI SD-card package |
 | `player/release.sh` | release artifacts and `manifest.json` |
+| `player/tools/i18n-gaps` | reports interface strings a language catalogue is missing and writes translator starter files |
 
 ## Roadmap
 

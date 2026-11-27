@@ -444,12 +444,19 @@ func pkgDrawStores(renderer *sdl.Renderer, config *Config, ft *pkgType, r sdl.Re
 
 	midY := r.Y + r.H/2
 	x := r.X
-	if showLabel {
-		renderText(renderer, config, ft.meta, pkgStoresLabel, ColorTextTertiary(), x, midY-labelH/2)
-		x += labelW + pkgStoreLabelGap
-	}
 	ring := pkgStoresHasPad()
 	cursor := clampIndex(pkgStores.cursor, len(links))
+	if showLabel {
+		// When the pills cannot carry their sub-labels, the focused store's
+		// sub takes the kicker's place: the user still learns what the
+		// highlighted store is for instead of guessing from its title.
+		kicker := pkgStoresLabel
+		if !showSubs && links[cursor].sub != "" {
+			kicker = ellipsize(ft.meta, links[cursor].sub, labelW)
+		}
+		renderText(renderer, config, ft.meta, kicker, ColorTextTertiary(), x, midY-labelH/2)
+		x += labelW + pkgStoreLabelGap
+	}
 	for i, l := range links {
 		title, tw := l.title, titleW[i]
 		if limit > 0 && tw > limit {

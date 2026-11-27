@@ -1387,6 +1387,10 @@ func main() {
 					if updatePrompt.open && handleUpdatePromptKey(e, config) {
 						continue
 					}
+					// A picture from the phone is fullscreen and consumes all keys.
+					if castReceiverHandleKey(e, config) {
+						continue
+					}
 					// Community hub is above the other overlays.
 					if communityPanel.open && handleCommunityKey(e, config) {
 						continue
@@ -3762,6 +3766,8 @@ func main() {
 		// between frames, never under a frame that is still drawing.
 		if next := takePendingConfigReload(); next != nil {
 			config = applyConfigReload(config, next)
+			// A hot-reloaded config may change anything on screen: draw it.
+			frameMarkDirty()
 		}
 		syncLEDLoopSettingsIfDue(config, time.Now())
 		// LED mode Microphone reads the mic here, on the main thread (ledmic.go).
@@ -3924,6 +3930,45 @@ func main() {
 		// Every focus ring drawn from here to Present bounces when a press moves
 		// it (homefocusglide.go, Settings → Focus bounce).
 		focusGlideFrame(config, currentSceneIndex)
+		// Dirty-frame presentation (PERF-3, dirtyframe.go): draw and present
+		// only when the screen has something new to show. animating is the
+		// loop's own "something moves by itself" answer; the end of the frame
+		// uses the same value for its cadence.
+		animating := html5GameActive() || transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
+			trophyOverlayActive() || chatBadgeAnimating()
+		// A start's first frames and the work its deferred start is doing
+		// draw every frame: they are the one time the screen is being built.
+		starting := !startupReported || deferredStartupPending || startupGreetingPending
+		if !dirtyFrameDue(time.Now(), animating, starting) {
+			// Nothing changed: the panel keeps the picture the last Present
+			// left, and this iteration costs no draw. The ticks that must not
+			// wait for a frame still run (the power key's Exit card, the
+			// brightness keys, the display probe), then the loop idles on its
+			// usual cadence; a press raised a dirty flag above and draws at
+			// once, and the 1 Hz safety redraw catches everything else.
+			powerKeyTick(config, false)
+			hwKeysTick(config, false)
+			brightnessFrameTick()
+			animTime = float64(sdl.GetTicks64()) / 1000.0
+			frameRateCtrl.SetAnimationActive(animating)
+			// Tell the still-frames gate an animation ended on this iteration
+			// too, or a quiet Home would wait for input before it could park
+			// again (stillframes.go).
+			stillNoteAnimating(animating)
+			frameRateCtrl.SetVideoActive(playerPhase() == "playing" && !ambientIsActive() && !ss.active)
+			adaptiveTick()
+			applyPowerMode(config)
+			saverFrameSleep(frameRateCtrl.Pace(time.Since(frameStart)))
+			frameCount++
+			if IsTrimuiDevice() && memMonitor != nil && frameCount%10 == 0 {
+				EvictCachesForPressure(memMonitor)
+			}
+			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
+				lastAlarmCheck = now
+				alarmCheck(config, now)
+			}
+			continue
+		}
 		// The dock/ambient screen takes the whole panel when it is up, then the
 		// screensaver, then the scene.
 		if ambientIsActive() {
@@ -4084,6 +4129,9 @@ func main() {
 		if calibrationPanel.open {
 			renderStickCalibrationPanel(renderer, config)
 		}
+
+		// A picture from the phone, above every scene and overlay.
+		renderCastReceiver(renderer, config)
 
 		// Community hub (changelog, bug report, telemetry consent).
 		if communityPanel.open {
@@ -4468,8 +4516,8 @@ func main() {
 
 		// Adaptive frame rate: faster while interacting/animating, slower when
 		// idle. LowPower picks the slowest cadence instead of forcing 60fps.
-		animating := html5GameActive() || transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
-			trophyOverlayActive() || chatBadgeAnimating()
+		// animating was computed for the dirty-frame decision at the top of
+		// this frame's draw.
 		frameRateCtrl.SetAnimationActive(animating)
 		stillNoteAnimating(animating)
 		// A moving backdrop — the liquid background's water, an animated

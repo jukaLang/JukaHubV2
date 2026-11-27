@@ -468,6 +468,10 @@ type webStyle struct {
 	// strikethroughs. Zero keeps the historical one-pixel line.
 	DecorationThickness float64
 	DecorationStyle     int
+	// DecorationOffset is text-underline-offset in CSS px: how far below its
+	// usual place the rule sits. A negative offset pulls it toward the
+	// glyphs, which is what a dotted link underline under tight type wants.
+	DecorationOffset float64
 	// TextShadow is one offset shadow behind the glyphs. Blur is not
 	// modelled; the offset and colour are, which is what makes a heading
 	// lift off a tinted hero. HasShadowColor distinguishes an author colour
@@ -1389,6 +1393,9 @@ type webRunPos struct {
 	HasDecorationColor  bool
 	DecorationThickness int32
 	DecorationStyle     int
+	// DecorationOffset moves the underline by text-underline-offset, in the
+	// same layout pixels as the rest of the run.
+	DecorationOffset int32
 	// Text shadow offsets and colour, resolved to layout pixels.
 	HasShadow        bool
 	ShadowX, ShadowY int32
@@ -3507,6 +3514,16 @@ var webSupportedProperties = map[string]bool{
 	"border": true, "border-bottom": true, "border-color": true,
 	"border-left": true, "border-radius": true, "border-right": true,
 	"border-top": true, "border-width": true, "color": true,
+	// Logical borders are the physical sides webLogicalBorderDecls rewrites
+	// them to, so an @supports test names them the way the page did.
+	"border-inline": true, "border-inline-start": true, "border-inline-end": true,
+	"border-block": true, "border-block-start": true, "border-block-end": true,
+	"border-inline-width": true, "border-block-width": true,
+	"border-inline-start-width": true, "border-inline-end-width": true,
+	"border-block-start-width": true, "border-block-end-width": true,
+	"border-start-start-radius": true, "border-start-end-radius": true,
+	"border-end-start-radius": true, "border-end-end-radius": true,
+	"text-underline-offset": true, "font-variant": true, "font-variant-caps": true,
 	"column-gap": true, "container": true, "container-name": true, "container-type": true,
 	"display": true, "flex": true, "flex-basis": true, "flex-direction": true, "flex-flow": true,
 	"float": true, "clear": true,
@@ -8722,10 +8739,85 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 	}
 }
 
+// webLogicalBorderDecls maps the logical border properties onto the physical
+// sides this reader draws. On a horizontal, left-to-right page
+// border-inline-start is the left edge and border-block-end the bottom one, and
+// the pages that use the logical names (RTL-aware design systems, Tailwind's
+// logical utilities) expect the same box as a page naming border-left.
+// A physical declaration the page also states wins, and a side declaration
+// beats the axis shorthand that covers it.
+func webLogicalBorderDecls(decls map[string]string) map[string]string {
+	type logicalBorder struct {
+		logical  string
+		physical [2]string // inline/block start first; a single side for a longhand
+	}
+	// Least to most specific: an axis shorthand, its two sides, then widths
+	// and radii, so a more specific logical name replaces a broader one.
+	logical := [...]logicalBorder{
+		{"border-inline", [2]string{"border-left", "border-right"}},
+		{"border-block", [2]string{"border-top", "border-bottom"}},
+		{"border-inline-start", [2]string{"border-left", ""}},
+		{"border-inline-end", [2]string{"border-right", ""}},
+		{"border-block-start", [2]string{"border-top", ""}},
+		{"border-block-end", [2]string{"border-bottom", ""}},
+		{"border-inline-width", [2]string{"border-left-width", "border-right-width"}},
+		{"border-block-width", [2]string{"border-top-width", "border-bottom-width"}},
+		{"border-inline-start-width", [2]string{"border-left-width", ""}},
+		{"border-inline-end-width", [2]string{"border-right-width", ""}},
+		{"border-block-start-width", [2]string{"border-top-width", ""}},
+		{"border-block-end-width", [2]string{"border-bottom-width", ""}},
+		{"border-start-start-radius", [2]string{"border-top-left-radius", ""}},
+		{"border-start-end-radius", [2]string{"border-top-right-radius", ""}},
+		{"border-end-start-radius", [2]string{"border-bottom-left-radius", ""}},
+		{"border-end-end-radius", [2]string{"border-bottom-right-radius", ""}},
+	}
+	var out map[string]string
+	set := func(name, value string) {
+		if name == "" {
+			return
+		}
+		if _, physical := decls[name]; physical {
+			// The page named the physical side too: it wins, as the later
+			// declaration of the same property would in a browser.
+			return
+		}
+		if out == nil {
+			out = make(map[string]string, len(decls)+4)
+			for key, value := range decls {
+				out[key] = value
+			}
+		}
+		out[name] = value
+	}
+	for _, entry := range logical {
+		value, ok := decls[entry.logical]
+		if !ok {
+			continue
+		}
+		first, second := value, value
+		if entry.physical[1] != "" && strings.Contains(entry.logical, "width") {
+			// An axis width shorthand takes one value for both sides or two in
+			// inline/block start-then-end order.
+			if fields := webCSSSpaceFields(value); len(fields) == 2 {
+				first, second = fields[0], fields[1]
+			}
+		}
+		set(entry.physical[0], first)
+		set(entry.physical[1], second)
+	}
+	if out == nil {
+		return decls
+	}
+	return out
+}
+
 func applyWebDecls(st *webStyle, decls map[string]string) {
 	if len(decls) == 0 {
 		return
 	}
+	// Logical border shorthands are physical sides here; rewrite them before
+	// the cascade below reads any edge.
+	decls = webLogicalBorderDecls(decls)
 	// The `font` shorthand comes before the longhands, so a sheet that sets
 	// both ends up with the longhand, the way a later declaration wins in a
 	// browser. It carries the size (and therefore every em length below), the
@@ -8900,6 +8992,16 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["text-decoration-style"]; ok {
 		if style := webDecorationStyleInValue(v); style >= 0 {
 			st.DecorationStyle = style
+		}
+	}
+	// text-underline-offset: modern design systems lift the rule clear of a
+	// descender or tuck a dotted link underline under its text. `auto` and the
+	// CSS-wide keywords leave the reader's own placement, as a browser does.
+	if v, ok := decls["text-underline-offset"]; ok {
+		if lower := strings.ToLower(strings.TrimSpace(v)); lower != "auto" && !webInheritKeyword(lower) {
+			if px := webSpacingPx(v, st.FontPx); px != 0 {
+				st.DecorationOffset = px
+			}
 		}
 	}
 	if v, ok := decls["text-shadow"]; ok {
@@ -13175,6 +13277,7 @@ func webResetElementStyle(st *webStyle) {
 	// shadow on the <span> and <a> inside it.
 	st.DecorationThickness = 0
 	st.DecorationStyle = 0
+	st.DecorationOffset = 0
 	st.VerticalAlign, st.VerticalAlignPx = 0, 0
 	st.OverflowX, st.OverflowY, st.ScrollX = 0, 0, false
 	st.OverflowBFC, st.FlowRoot = false, false
@@ -15767,10 +15870,21 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 	// ancestors too; reserving the container's 240px height inside a one-line
 	// item consumed all the free space the item's margin-top:auto would have
 	// taken, pinning it to the top of the column.
+	previousMarginBot := 0.0
 	ownedBoxes := make(map[int]bool, 8)
 	for _, b := range blocks {
 		if b.BoxOwner != 0 {
 			ownedBoxes[b.BoxOwner] = true
+		}
+		// A wrapper whose content is a block-level child owns no block of its
+		// own: Wikipedia's bookshelf heading is an `h2` (height 1px, 2.4rem
+		// margins) around a `display:block` span. Its insets were dropped and
+		// the next language list was laid over its last line, with the shelf
+		// label pulled up into it. Boxes past the prefix an outer flex/grid
+		// pass already resolved belong to this subtree, so their height and
+		// margins can be reserved here too.
+		for k := min(l.constraintSkip, len(b.Boxes)); k < len(b.Boxes); k++ {
+			ownedBoxes[b.Boxes[k]] = true
 		}
 	}
 	var openBoxes []int
@@ -15783,6 +15897,14 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		info, ok := d.Boxes[id]
 		if !ok {
 			return
+		}
+		// The wrapper's own bottom margin carries its padding. Its painted
+		// surface reaches that far past the last child, so the next block must
+		// start below it instead of running over the padded edge. Opening the
+		// box already skipped its top inset; the bottom used to be dropped and
+		// a heading could land inside a contents box's bottom padding.
+		if bottom := info.style.MarginBot; bottom > previousMarginBot {
+			previousMarginBot = bottom
 		}
 		px := max(info.style.Height, info.style.MinHeight)
 		if px <= 0 || baseSize <= 0 || rowH <= 0 {
@@ -15840,7 +15962,8 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 	// Adjacent vertical margins collapse to the larger of the two, the way CSS
 	// does it. Summing them stacked a heading's own spacing on top of the
 	// previous block's and filled real pages with holes on a small screen.
-	previousMarginBot := 0.0
+	// previousMarginBot is declared above syncBoxes: closing a box raises it
+	// to that box's bottom inset so the gap below the wrapper covers it.
 	flowPadX, flowContentW := padX, contentW
 	var floatReserves []webFloatReserve
 	// besideFloats places a box that cannot run under a float — a flex row, a
@@ -16982,6 +17105,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						HasDecorationColor:  run.Style.HasDecorationColor,
 						DecorationThickness: int32(math.Round(run.Style.DecorationThickness * baseSize / 16)),
 						DecorationStyle:     run.Style.DecorationStyle,
+						DecorationOffset:    int32(math.Round(run.Style.DecorationOffset * baseSize / 16)),
 						HasShadow:           run.Style.HasTextShadow,
 						ShadowX:             int32(math.Round(run.Style.TextShadowX * baseSize / 16)),
 						ShadowY:             int32(math.Round(run.Style.TextShadowY * baseSize / 16)),
@@ -17821,6 +17945,22 @@ func webRestoreClip(renderer *sdl.Renderer, old sdl.Rect) {
 // webDecorationPaintRects is the underline/strikethrough equivalent of the
 // border geometry helper: one solid bar, paired bars for double, and broken or
 // wavy runs for the other styles. Coordinates are relative to the page rect.
+// webUnderlinePaintY is where a run's underline sits: under the glyph box, as
+// the reader has always drawn it, moved by text-underline-offset (a positive
+// offset away from the text, a negative one toward it). The paint path and its
+// tests share it, so the property cannot be parsed and then not drawn.
+func webUnderlinePaintY(run *webRunPos, textY int32) int32 {
+	height := int32(16)
+	offset := int32(0)
+	if run != nil {
+		offset = run.DecorationOffset
+		if run.Font != nil {
+			height = int32(run.Font.Height())
+		}
+	}
+	return textY + height - 5 + offset
+}
+
 func webDecorationPaintRects(x, y, width, thickness int32, style int) []sdl.Rect {
 	if width <= 0 {
 		return nil

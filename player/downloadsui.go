@@ -324,7 +324,7 @@ func downloadPanelActivate(config *Config) {
 			ShowToast("Resumed the queue", ToastKindInfo)
 			return
 		}
-		ShowToast("Waiting for the current download", ToastKindInfo)
+		ShowToast("Waiting for the downloads in progress", ToastKindInfo)
 	default:
 		ShowToast("Still downloading", ToastKindInfo)
 	}
@@ -523,6 +523,16 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	// All three panel sections describe the same moment of the queue. A single
 	// snapshot avoids three extra sorts and copies on every rendered frame.
 	items := downloadPanelItems()
+	// A row that is downloading carries a live percentage and speed from its
+	// worker goroutine but requests nothing itself. Ask for a frame a few
+	// times a second so the bar moves, instead of the one-second safety redraw
+	// dirty-frame presentation would otherwise leave it at (dirtyframe.go).
+	for _, it := range items {
+		if it.Status == downloadActive {
+			requestFrameEvery(100)
+			break
+		}
+	}
 
 	panelW := int32(940)
 	if panelW > screenWidth-48 {
@@ -758,9 +768,12 @@ func drawDownloadTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x,
 		if err != nil {
 			continue
 		}
-		// Check before drawing: the old check ran after the label was painted,
-		// so the last tab could spill past the strip's right edge.
-		if cx+int32(tw) > x+w {
+		// A tab that does not fit is shortened, not dropped: a hidden tab is
+		// a list the user cannot reach at all.
+		if avail := x + w - cx - 16; avail < int32(tw) && avail >= 40 {
+			label = ellipsize(font, label, avail)
+			tw, _, _ = font.SizeUTF8(label)
+		} else if avail < 40 {
 			break
 		}
 		dlPanel.tabs = append(dlPanel.tabs, sdl.Rect{
@@ -772,8 +785,7 @@ func drawDownloadTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x,
 		}
 		renderText(renderer, config, font, label, color, cx, y)
 		if entry.tab == dlPanel.tab {
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 235)
-			renderer.FillRect(&sdl.Rect{X: cx, Y: y + int32(th) + 5, W: int32(tw), H: 3})
+			drawTabUnderline(renderer, sdl.Rect{X: cx - 8, Y: y - 6, W: int32(tw) + 16, H: int32(th) + 14})
 		}
 		cx += int32(tw) + 30
 		if cx > x+w {
@@ -1131,7 +1143,11 @@ func downloadRowDetail(it downloadItem) string {
 		}
 		return detail + " · A plays it"
 	case downloadQueued:
-		return "Waiting for its turn"
+		detail := "Waiting for its turn"
+		if site := videoSiteForURL(it.URL); site != "" {
+			detail += " · " + site
+		}
+		return detail
 	}
 	return ""
 }

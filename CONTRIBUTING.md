@@ -173,10 +173,9 @@ should finish in seconds, so it gets run.
 | Bug fix in one of the above | a test that fails before your fix |
 | A feature's flow or state, rendering, layout, copy, colours, focus geometry, timing, the maths behind an effect or an estimate | no test — check it on screen (Windows build, then the device) |
 
-Owner rule (2026-11-10): the suite grew from 90 to 180 files in two days,
-almost all of it feature tests, and was cut back to the rows above. Add a case
-to an existing test file before starting a new one, and start a new one only
-for a row above.
+Those rows are enforced in review: presentation, layout, copy and feature-flow
+tests do not belong in the suite. Add a case to an existing test file before
+starting a new one, and start a new one only for a row above.
 
 Tests never open an SDL window, renderer or font, never sleep for more than a
 few milliseconds, never touch the network beyond an `httptest` server, and never
@@ -300,8 +299,9 @@ The pull request template asks for the same thing in checklist form, including
 a `CHANGELOG.md` entry under `Unreleased` for anything a user can see. In the
 pull request, describe the user-visible change, how you verified it
 (commands, rendered screenshots, on-device checks) and anything you could not
-verify. Say explicitly which checks failed, if any — "the suite's video
-fullscreen test crashed as usual" is useful information, not a failure.
+verify. Say explicitly which checks failed, if any, and what you could not
+run — a failure you can name is useful information, not a reason to hide the
+pull request.
 
 ## Security
 

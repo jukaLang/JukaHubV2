@@ -89,6 +89,10 @@ type playtimeState struct {
 	// streaks and the last seven days on a clock still at its power-on default,
 	// nor the platinum before it knew what this setup can award.
 	catchUpDue bool
+	// sessions is the bounded log of finished game sessions, each keyed by the
+	// cartridge's content hash (playtime_store.go). It changes with a game
+	// session, so the same save carries it to its own file.
+	sessions []playtimeSession
 }
 
 var playtime playtimeState
@@ -126,35 +130,30 @@ func playtimeInit(config *Config) {
 	prev := playtime
 	playtime = playtimeState{data: newPlaytimeData(), rev: prev.rev,
 		session: prev.session, lastDay: prev.lastDay, lastRecordAt: prev.lastRecordAt}
+	playtime.sessions = playtimeSessionsLoad()
+	data, fromFile := playtimeStoreLoad()
+	playtime.data = data
 	if config != nil {
 		if raw, ok := config.Variables.Custom[playtimeCustomKey]; ok {
-			if b, err := json.Marshal(raw); err == nil {
-				var data playtimeData
-				if err := json.Unmarshal(b, &data); err == nil {
-					if data.Scenes == nil {
-						data.Scenes = map[string]int64{}
+			// The snapshot used to ride in jukauser.json. It is its own file now,
+			// and the old key goes, so saving a setting no longer carries (and
+			// rewrites) playtime with it. A first run on a build before the file
+			// takes the key's contents across once.
+			if !fromFile {
+				if b, err := json.Marshal(raw); err == nil {
+					var legacy playtimeData
+					if err := json.Unmarshal(b, &legacy); err == nil {
+						playtime.data = playtimeCleanData(legacy)
 					}
-					if data.Days == nil {
-						data.Days = map[string]int64{}
-					}
-					if data.Unlocked == nil {
-						data.Unlocked = map[string]string{}
-					}
-					if data.Games == nil {
-						data.Games = map[string]int64{}
-					}
-					if data.GameDays == nil {
-						data.GameDays = map[string]int64{}
-					}
-					if data.Counts == nil {
-						data.Counts = map[string]int64{}
-					}
-					if data.Sets == nil {
-						data.Sets = map[string][]uint32{}
-					}
-					playtime.data = data
 				}
 			}
+			delete(config.Variables.Custom, playtimeCustomKey)
+			if !fromFile {
+				if err := playtimeStoreSave(playtime.data); err != nil {
+					logWarn("playtime", "cannot write %s: %v", playtimeFileName, err)
+				}
+			}
+			saveUserConfigDebounced(userConfigFromVariables(config))
 		}
 	}
 	// Bare-title entries from older saves move under their console where only
@@ -207,41 +206,42 @@ func trophySeedFromHistory(d *playtimeData, now time.Time) {
 	}
 }
 
+// playtimePersist writes the snapshot to its own file. It used to put the
+// whole snapshot into config.Variables.Custom and save the user config, which
+// rewrote jukauser.json (and its .bak) every couple of minutes just for
+// playtime; the config is not touched here any more (playtime_store.go).
 func playtimePersist(config *Config) {
-	if config == nil {
-		return
-	}
-	if config.Variables.Custom == nil {
-		config.Variables.Custom = map[string]interface{}{}
-	}
 	playtimePruneDays()
-	config.Variables.Custom[playtimeCustomKey] = playtime.data
+	playtime.sessions = playtimeSessionsPrune(playtime.sessions, time.Now())
+	if err := playtimeStoreSave(playtime.data); err != nil {
+		logWarn("playtime", "cannot write %s: %v", playtimeFileName, err)
+	}
+	if err := playtimeSessionsSave(playtime.sessions); err != nil {
+		logWarn("playtime", "cannot write %s: %v", playtimeSessionsFileName, err)
+	}
 	playtime.lastSave = time.Now()
 	playtime.dirty = false
-	saveUserConfigDebounced(userConfigFromVariables(config))
 	playtimePeriodsPersist(false) // the days by game, in their own file
 }
 
 // playtimeFlush is called on graceful exit so the last partial interval and
 // any freshly unlocked trophy are not lost.
 func playtimeFlush(config *Config) {
-	if !playtime.loaded || config == nil {
+	if !playtime.loaded {
 		return
 	}
 	playtimeTick(config)
 	playtimePruneDays()
-	if config.Variables.Custom == nil {
-		config.Variables.Custom = map[string]interface{}{}
+	playtime.sessions = playtimeSessionsPrune(playtime.sessions, time.Now())
+	// Synchronous on exit: the files are written here rather than left to the
+	// next interval, which would lose the last session of the run.
+	if err := playtimeStoreSave(playtime.data); err != nil {
+		logWarn("playtime", "cannot write %s: %v", playtimeFileName, err)
 	}
-	config.Variables.Custom[playtimeCustomKey] = playtime.data
+	if err := playtimeSessionsSave(playtime.sessions); err != nil {
+		logWarn("playtime", "cannot write %s: %v", playtimeSessionsFileName, err)
+	}
 	playtime.dirty = false
-	// Synchronous on exit: the debounced writer can be still pending when the
-	// process closes, which used to lose the last few seconds of stats. It goes
-	// through the writer's own slot and is flushed at once, so an older copy
-	// still waiting there (the tick above may have queued one) cannot be
-	// written after it by the shutdown's flush.
-	saveUserConfigDebounced(userConfigFromVariables(config))
-	flushPendingUserConfig()
 	playtimePeriodsPersist(true) // the days by game, on the card before going on
 }
 
@@ -251,7 +251,9 @@ func playtimeFlush(config *Config) {
 const playtimeMaxGames = 64
 
 func playtimePruneDays() {
-	cutoff := time.Now().AddDate(0, 0, -90).Format("2006-01-02")
+	// 400 days: the per-day store's own window (playtimePeriodsKeepDays) and
+	// what Wrapped's 53-week year draws, so the heatmap has every cell.
+	cutoff := time.Now().AddDate(0, 0, -playtimeDaysKept).Format("2006-01-02")
 	for day := range playtime.data.Days {
 		if day < cutoff {
 			delete(playtime.data.Days, day)
@@ -812,6 +814,10 @@ func playtimeCreditGameGap(gapStart, gapEnd time.Time) {
 	}
 	d.Games[key] += secs
 	d.GameDays[day] += secs
+	// The session log keeps the record itself — content hash, start, length —
+	// beside the day's total (playtime_store.go).
+	playtimeSessionNote(recents[0].Path, recents[0].System, title,
+		gapEnd.Add(-time.Duration(secs)*time.Second), secs, day)
 	playtimePeriodsCredit(key, day, secs) // by game and day, for the By game tab
 	d.Total += secs
 	d.Days[day] += secs

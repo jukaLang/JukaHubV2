@@ -368,18 +368,34 @@ func RemovePackage(ctx context.Context, p *PatchPackage, files []PackageFile) er
 	return nil
 }
 
-// IsPackageInstalled reports whether every managed file exists.
+// IsPackageInstalled reports whether at least one managed file still exists
+// on disk: a package counts as installed only while it owns a file. A record
+// whose files are all gone shows as "files missing" instead (see
+// PackageFilesMissing).
 func IsPackageInstalled(p *PatchPackage) bool {
+	if len(p.Files) == 0 {
+		return false
+	}
 	for _, f := range p.Files {
 		dst, err := resolvePackageDest(p, &f)
 		if err != nil {
-			return false
+			continue
 		}
-		if _, err := os.Stat(dst); err != nil {
-			return false
+		if _, err := os.Stat(dst); err == nil {
+			return true
 		}
 	}
-	return true
+	return false
+}
+
+// PackageFilesMissing reports whether a package owns files but none of them
+// exist on disk any more — the "files missing" state that offers Reinstall
+// and Forget.
+func PackageFilesMissing(p *PatchPackage) bool {
+	if p == nil || len(p.Files) == 0 {
+		return false
+	}
+	return !IsPackageInstalled(p)
 }
 
 // ── Package status cache ──────────────────────────────────────────────────

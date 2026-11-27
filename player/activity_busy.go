@@ -94,6 +94,20 @@ func activityBusyEnd(id uint64) {
 	}
 }
 
+// activityBusyActive reports whether any chip is (or is about to be) shown,
+// without building the labels: its spinner turns, so dirty-frame presentation
+// keeps drawing while such work is open (dirtyframe.go).
+func activityBusyActive(now time.Time) bool {
+	activityBusy.mu.Lock()
+	defer activityBusy.mu.Unlock()
+	for _, e := range activityBusy.entries {
+		if now.Sub(e.since) <= activityBusyMaxAge {
+			return true
+		}
+	}
+	return false
+}
+
 // activityBusyLabels is what the strip shows now: one label per kind of work,
 // oldest first, past activityBusyShowAfter and within activityBusyMaxAge.
 // Stale entries are pruned on the way. pending reports an entry that is open

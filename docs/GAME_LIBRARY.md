@@ -534,6 +534,22 @@ The library can also look up genre, developer, release year and player count
 from libretro-database's separate DAT files. Descriptions and notes are yours to
 write; manuals and screenshots are not fetched.
 
+## Audit against No-Intro and Redump DATs
+
+**Select → Audit the library (DAT)** checks every ROM against a DAT: verified
+releases, missing games, bad dumps, duplicates and rename suggestions. The DATs
+go in `data/rom-audit/dat`; nothing is downloaded. See
+[ROM Audit](ROM_AUDIT.md) for the verdicts, the size limits and the saved
+report.
+
+**Select → Play Journal** shows the sessions recorded across the library, the
+status counts, and this year's hours, most-played game, games beaten and
+longest streak; **X** saves the year-in-review card to `data/journal`.
+**Select → Next up from your backlog** opens the backlog game
+that has waited longest. Statuses, ratings and notes are set on the game page
+or from the phone companion's Games card; see
+[Automatic collections](COLLECTIONS.md).
+
 ## Launching
 
 Pressing **A** on a game (in the library, on Continue, or on a ROM in Files)
@@ -774,6 +790,14 @@ Neo Geo Pocket: Beetle NeoPop, RACE; Atari 2600: Stella 2014, Stella; Lynx:
 Handy, Beetle Lynx; and so on). It is in Settings → Games & emulators, a tile
 on the Emulators page, and, for one console, the last row of
 **Which emulator?** and **X** on Game options → **Emulator**.
+
+A core is left out, here and among the Emulators page's downloadable tiles,
+when a faster emulator for its console is already there: ParaLLEl N64 and the
+old Mupen64Plus core (Mupen64Plus-Next is the faster N64 core on this chip),
+and, on a model JukaHub installs its own PPSSPP for, RetroArch's PPSSPP core,
+which is an older PPSSPP than that build. A core already on the card stays
+listed and updated, and the PSP tile's PPSSPP card still installs RetroArch's
+core when you press there. A PC is not affected.
 
 A core is downloaded only when the buildbot's aarch64 index lists it, it is not
 on the card, and that exact build was not refused here before. Each goes

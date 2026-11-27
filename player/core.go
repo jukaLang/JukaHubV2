@@ -5600,6 +5600,9 @@ func showToastPrimitiveMode(message string, kind ToastKind, quiet bool) {
 		linesW:    -1,
 	}, now)
 	currentToastMu.Unlock()
+	// A toast is a change on its own (a download finishing, an alarm result):
+	// the next frame draws it even when nothing was pressed.
+	frameMarkDirty()
 	if msg == "" {
 		return
 	}
@@ -6833,6 +6836,9 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	if targetIdx < 0 || targetIdx >= len(config.Scenes) || targetIdx == currentSceneIndex {
 		return
 	}
+	// The screen is about to show another scene: dirty-frame presentation
+	// draws it now (dirtyframe.go).
+	frameMarkDirty()
 	if record {
 		pushSceneHistory(currentSceneIndex)
 	}

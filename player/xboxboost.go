@@ -718,22 +718,27 @@ func xboxBoostRecover() {
 // online switch, a devfreq GPU's or memory controller's governor or floor, or
 // a disk's read-ahead (/sys/block/<disk>/queue/read_ahead_kb).
 func xboxBoostWritable(p string) bool {
-	if p == "" || p != filepath.Clean(p) {
+	// The sysfs paths in a marker are written with slashes even on Windows,
+	// where filepath.Clean would turn them into backslashes. Normalise both
+	// sides before comparing them, so a Windows test of a TrimUI path means
+	// the same thing as the check on the device.
+	p = filepath.Clean(filepath.FromSlash(p))
+	if p == "" || p == "." {
 		return false
 	}
 	dir, base := filepath.Dir(p), filepath.Base(p)
 	switch base {
 	case "online":
 		name := filepath.Base(dir)
-		return filepath.Dir(dir) == filepath.Clean(cpufreqRoot) && len(name) > 3 &&
+		return filepath.Dir(dir) == filepath.Clean(filepath.FromSlash(cpufreqRoot)) && len(name) > 3 &&
 			strings.HasPrefix(name, "cpu") && strings.Trim(name[3:], "0123456789") == ""
 	case "governor", "min_freq":
 		name := filepath.Base(dir)
-		return filepath.Dir(dir) == filepath.Clean(xboxBoostDevfreqRoot) &&
+		return filepath.Dir(dir) == filepath.Clean(filepath.FromSlash(xboxBoostDevfreqRoot)) &&
 			(strings.Contains(strings.ToLower(name), "gpu") || xboxBoostMemName(name))
 	case "read_ahead_kb":
 		disk := filepath.Dir(dir)
-		return filepath.Base(dir) == "queue" && filepath.Dir(disk) == filepath.Clean(xboxBoostBlockRoot) &&
+		return filepath.Base(dir) == "queue" && filepath.Dir(disk) == filepath.Clean(filepath.FromSlash(xboxBoostBlockRoot)) &&
 			xboxBoostDiskName(filepath.Base(disk))
 	}
 	return false

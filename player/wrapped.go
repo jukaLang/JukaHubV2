@@ -2,10 +2,10 @@ package main
 
 // wrapped.go — the Playtime screen's insights half.
 //
-// playtime.go already collects the series this needs (Days for the last 90
+// playtime.go already collects the series this needs (Days for the last 400
 // days, Scenes for the lifetime split) and showed only the second one plus seven
 // bars for the past week. This file turns the same data into the shape a player
-// actually asks about — how consistent have I been (a 13-week heatmap and the
+// actually asks about — how consistent have I been (a year's heatmap and the
 // current streak), and what was my best day. Nothing new is tracked; the numbers
 // are derived per frame from the snapshot, which is a few hundred map lookups and
 // therefore far cheaper than the render calls around it.
@@ -23,9 +23,10 @@ import (
 )
 
 const (
-	// wrappedWeeks is the heatmap width. 13 weeks is the largest whole-week
-	// grid that fits the 90 days playtimePruneDays keeps.
-	wrappedWeeks = 13
+	// wrappedWeeks is the heatmap width: 53 whole weeks is a year, which is the
+	// window LIB-13 keeps (playtimeDaysKept, 400 days) and what The Playtime
+	// screen's Wrapped card covers.
+	wrappedWeeks = 53
 	// wrappedDays is the cell count: whole weeks only.
 	wrappedDays = wrappedWeeks * 7
 	// wrappedDayKey is the layout playtimeData.Days is keyed by.

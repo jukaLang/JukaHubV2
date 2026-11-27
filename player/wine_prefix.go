@@ -691,6 +691,14 @@ func wineApplyDefaultEnv(env map[string]string, prefix string) {
 	if !hasEnvKey(env, "WINEDEBUG") {
 		env["WINEDEBUG"] = "-all"
 	}
+	// Optional components the user listed and installed point Wine at their
+	// verified cache files. Nothing is fetched here: the card and the download
+	// are both user-driven (wine_components.go).
+	for key, value := range wineComponentsEnv() {
+		if !hasEnvKey(env, key) {
+			env[key] = value
+		}
+	}
 	if !hasEnvKey(env, "HOME") && !wineHomeUsable() {
 		// Named apart from the wine-<version> folders that old-runtime
 		// cleanup removes.

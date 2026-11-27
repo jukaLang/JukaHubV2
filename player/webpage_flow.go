@@ -788,11 +788,17 @@ func (l *webLayouter) fitBoxWidth(id int) int32 {
 // columns just because the child had an h2 followed by a p.
 func webGroupFlexItems(blocks []webBlock) []webFlexItem {
 	var grouped []webFlexItem
-	last := -1
+	// The first block always opens a group. A "last" number cannot say that
+	// on its own: a table row numbers its cells from -1 (-(c+1), see
+	// webpage_table.go), so a sentinel of -1 read the row's first cell as a
+	// repeat of a group that did not exist yet and indexed the empty list.
+	last := 0
+	haveLast := false
 	for _, block := range blocks {
-		if block.FlexItem != last || block.FlexItem == 0 {
+		if !haveLast || block.FlexItem != last || block.FlexItem == 0 {
 			grouped = append(grouped, webFlexItem{})
 			last = block.FlexItem
+			haveLast = true
 		}
 		grouped[len(grouped)-1].blocks = append(grouped[len(grouped)-1].blocks, block)
 	}

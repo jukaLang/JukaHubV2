@@ -1451,6 +1451,17 @@ func launchEmulatorEntry(e emuEntry) {
 		invalidateEmulatorCache()
 		return
 	}
+	// A system whose launch script runs RetroArch is written for a game: MainUI
+	// starts it with one. With none, its "$*" is one empty argument, which
+	// RetroArch takes for a content path and refuses ("Libretro core requires
+	// content, but nothing was provided"), so A on the ARCADE tile ended in a
+	// launch-failure card (2026-11-26, JH-DMFR6X). The tile opens the console's
+	// games in the Games library instead, where a start gives the script the
+	// game it needs; RetroArch's own tile opens its menu.
+	if !IsWindows() && !ppssppMenu && launcherShellScript(path) && retroArchLauncher(path) {
+		emuSystemGames(e, path)
+		return
+	}
 	logDebug("emulators", "launching %s (%s)", e.Name, path)
 	// While PSP games get the panel to themselves, so does PPSSPP's menu:
 	// JukaHub closes for it and comes back when it ends (hakux_handoff.go).
@@ -1542,6 +1553,28 @@ func launchEmulatorEntry(e emuEntry) {
 		return
 	}
 	ShowToast("Launching "+e.Name, ToastKindSuccess)
+}
+
+// emuSystemGames is A on a system whose launch script is a RetroArch script:
+// its games in the Games library, because the script starts RetroArch with a
+// game and has no menu of its own to open (JH-DMFR6X). The core the script
+// names says which console that is; the tile's own name is the fallback.
+func emuSystemGames(e emuEntry, launcher string) {
+	core := gameCoreFromLauncher(launcher, e.Name)
+	system := canonicalCompatSystem(e.Name)
+	if name, _ := emuCoreInfo(core); name != "" {
+		system = canonicalCompatSystem(name)
+	}
+	if strings.TrimSpace(system) == "" {
+		system = e.Name
+	}
+	engine := e.Name
+	if core != "" {
+		engine = core
+	}
+	openGameLibraryPanel()
+	setGameLibraryQuery(system)
+	ShowToast(system+" games · "+engine+" runs them in RetroArch", ToastKindInfo)
 }
 
 // emuSelectedEntry is the highlighted tile.

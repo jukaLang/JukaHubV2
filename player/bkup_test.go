@@ -64,6 +64,7 @@ var bkupTestSetup = map[string]string{
 	"app/plugins/demo/helper.bin":       "\x7fELF compiled for one system",
 	"data/vk-words.json":                `{"words": []}`,
 	"data/games.json":                   `{"games": {}}`,
+	"data/game-meta/games.json":         `{"version":1,"games":{}}`,
 	"data/weather-cache.json":           `{"cached": true}`,
 	"data/browser-cookies.json":         `{"session": "secret"}`,
 	"data/input-profiles/pad.jkinput":   "profile: Pad\n",
@@ -80,6 +81,7 @@ var (
 	bkupTestTargets = []string{
 		"app:jukauser.json", "app:jukatimezone", "app:jukaconfig.json", "app:notes.json", "themes:neon.json",
 		"plugins:demo/plugin.json", "plugins:demo/run.sh", "data:vk-words.json", "data:games.json",
+		"data:game-meta/games.json",
 		"input:pad.jkinput", "packs:mine/pack.json", "saves/retroarch:game.srm", "patch:db/db.json",
 		"doc:" + cfgdocFileName,
 	}

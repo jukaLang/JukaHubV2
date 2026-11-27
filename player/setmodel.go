@@ -401,11 +401,11 @@ func setWeatherUnitCurrent(c *Config) int {
 // Auto, which it reads as 720p.
 func setResolutionOptions(*Config) []setOption {
 	return []setOption{
-		{Value: "", Label: "Auto · 720p"},
-		{Value: "360", Label: "360p"},
-		{Value: "480", Label: "480p"},
-		{Value: "720", Label: "720p"},
-		{Value: "1080", Label: "1080p"},
+		{Value: "", Label: "Auto · 720p", Note: "Starts at 720p and drops when the connection cannot keep up."},
+		{Value: "360", Label: "360p", Note: "Smallest and easiest to play; best on a slow Wi-Fi link."},
+		{Value: "480", Label: "480p", Note: "A middle ground for handheld screens and weaker decoders."},
+		{Value: "720", Label: "720p", Note: "Sharp enough for most videos; the usual handheld choice."},
+		{Value: "1080", Label: "1080p", Note: "Sharpest, but uses more data and may stutter on long videos."},
 	}
 }
 
@@ -1514,6 +1514,28 @@ func setBuildSections() []setSection {
 					Open:   mediaOpenDownloads,
 				},
 				{
+					ID: "videoSites", Label: "Video sites", Kind: setKindInfo,
+					Detail: setStatic("Sites yt-dlp is known to read. Links to other sites work too; this is just what JukaHub recognises for labels."),
+					Value:  videoSiteSummary,
+				},
+				{
+					ID: "videoSiteAdd", Label: "Add a video site", Kind: setKindChoice,
+					Detail:  setStatic("Pick a site to remember it. Plugins can add their own sites in plugin.json."),
+					Options: videoSiteAddOptions,
+					Current: func(*Config) int { return -1 },
+					Value:   func(*Config) string { return "A opens the list" },
+					Choose: func(c *Config, value string) {
+						if value == "" {
+							return
+						}
+						if videoSiteAdd(c, value) {
+							setToast("Remembered " + value)
+						} else {
+							setToast(value + " is already in the list")
+						}
+					},
+				},
+				{
 					ID: "keepWatched", Label: "Keep fully watched videos", Kind: setKindToggle,
 					Detail: func(c *Config) string {
 						if mediaKeepWatchedEnabled(c) {
@@ -2241,6 +2263,15 @@ func setBuildSections() []setSection {
 					ID: "homeTipHide", Label: "Hide today's tip", Kind: setKindAction,
 					Detail: setStatic("A new one comes tomorrow"),
 					Open:   helpHideTodaysTip,
+				},
+				{
+					// The folder errors.txt and the crash reports are in
+					// (logsfolder.go): a Windows release has no console, so this
+					// is where a user finds what went wrong.
+					ID: "helpOpenLogs", Label: "Open logs folder", Kind: setKindAction,
+					Detail:  logsFolderDetail,
+					Open:    func(*Config) { openLogsFolder() },
+					Visible: func(*Config) bool { return IsWindows() },
 				},
 			},
 		},

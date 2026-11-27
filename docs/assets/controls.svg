@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" width="1200" height="470" role="img" aria-labelledby="ctlTitle ctlDesc">
+  <title id="ctlTitle">Controls at a glance</title>
+  <desc id="ctlDesc">Button cheat sheet. D-pad moves and chooses. A opens, B goes back, X and Y are the second and third actions. L1 and R1 change section or page. Start opens the Start menu. Holding Select opens Quick Settings. Select plus Start quits to the stock menu. Menu opens the voice orb. Desktop key F1 shows the full list.</desc>
+
+  <defs>
+    <style>
+      .h1 { font: 600 26px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #f4f7fb; }
+      .sub { font: 400 15px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #9aa6b6; }
+      .key { font: 600 18px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #eaf1fb; }
+      .keySmall { font: 600 15px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #eaf1fb; }
+      .desc { font: 400 14px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #9aa6b6; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="470" rx="24" fill="#0b0f18"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="468.5" rx="23.25" fill="none" stroke="#1e2839" stroke-width="1.5"/>
+
+  <text class="h1" x="60" y="66">Controls at a glance</text>
+  <text class="sub" x="60" y="94">The same buttons on every screen; a screen that adds its own shows them in the footer.</text>
+
+  <!-- row 1 -->
+  <g>
+    <rect x="64" y="128" width="118" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="key" x="123" y="160" text-anchor="middle">D-pad</text>
+    <text class="desc" x="123" y="204" text-anchor="middle">move, choose</text>
+
+    <rect x="284" y="128" width="56" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="key" x="312" y="160" text-anchor="middle">A</text>
+    <text class="desc" x="312" y="204" text-anchor="middle">open</text>
+
+    <rect x="460" y="128" width="56" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="key" x="488" y="160" text-anchor="middle">B</text>
+    <text class="desc" x="488" y="204" text-anchor="middle">back</text>
+
+    <rect x="636" y="128" width="56" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="key" x="664" y="160" text-anchor="middle">X</text>
+    <text class="desc" x="664" y="204" text-anchor="middle">second action</text>
+
+    <rect x="812" y="128" width="56" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="key" x="840" y="160" text-anchor="middle">Y</text>
+    <text class="desc" x="840" y="204" text-anchor="middle">third action</text>
+
+    <rect x="988" y="128" width="148" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="keySmall" x="1062" y="159" text-anchor="middle">L1 / R1</text>
+    <text class="desc" x="1062" y="204" text-anchor="middle">section, page</text>
+  </g>
+
+  <line x1="60" y1="246" x2="1140" y2="246" stroke="#18202e" stroke-width="1.5"/>
+
+  <!-- row 2 -->
+  <g>
+    <rect x="64" y="278" width="110" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="key" x="119" y="310" text-anchor="middle">Start</text>
+    <text class="desc" x="119" y="354" text-anchor="middle">Start menu</text>
+
+    <rect x="262" y="278" width="110" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="key" x="317" y="310" text-anchor="middle">Select</text>
+    <text class="desc" x="317" y="354" text-anchor="middle">hold: Quick Settings</text>
+
+    <rect x="470" y="278" width="212" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="keySmall" x="576" y="309" text-anchor="middle">Select + Start</text>
+    <text class="desc" x="576" y="354" text-anchor="middle">quit to the stock menu</text>
+
+    <rect x="770" y="278" width="100" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="key" x="820" y="310" text-anchor="middle">Menu</text>
+    <text class="desc" x="820" y="354" text-anchor="middle">voice orb (F4)</text>
+
+    <rect x="962" y="278" width="174" height="50" rx="13" fill="#141b28" stroke="#33415a" stroke-width="1.5"/>
+    <text class="keySmall" x="1049" y="309" text-anchor="middle">F1 · keyboard</text>
+    <text class="desc" x="1049" y="354" text-anchor="middle">full button list</text>
+  </g>
+
+  <line x1="60" y1="394" x2="1140" y2="394" stroke="#18202e" stroke-width="1.5"/>
+  <text class="sub" x="60" y="428">Cheat sheet, not a hardware map — where the buttons sit depends on the model. Every screen's table: docs/CONTROLS.md</text>
+</svg>

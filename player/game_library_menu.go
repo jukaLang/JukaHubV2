@@ -28,6 +28,9 @@ const (
 	glmSearch
 	glmArt
 	glmRescan
+	glmAudit
+	glmNextUp
+	glmJournal
 	glmLook
 )
 
@@ -75,8 +78,16 @@ func gameLibMenuRows() []gameLibMenuRow {
 	if artworkFetchRunning() {
 		art.title, art.detail = "Stop the box-art fetch", "It carries on where it stopped next time"
 	}
+	nextUp := gameLibMenuRow{id: glmNextUp, title: "Next up from your backlog",
+		detail: "No backlog games yet — set a status on a game's page"}
+	if game, days, ok := gameNextUpPick(gameLib.lib); ok {
+		nextUp.detail = game.Label() + " · " + gameWaitLabel(days)
+	}
 	rows = append(rows, tags, search, art,
-		gameLibMenuRow{id: glmRescan, title: "Rescan the card", detail: "Look for games added or removed since", button: "Y"})
+		gameLibMenuRow{id: glmRescan, title: "Rescan the card", detail: "Look for games added or removed since", button: "Y"},
+		gameLibMenuRow{id: glmAudit, title: "Audit the library (DAT)", detail: "No-Intro/Redump: missing games, bad dumps, duplicates, renames"},
+		gameLibMenuRow{id: glmJournal, title: "Play Journal", detail: "Sessions, statuses, most-played and your year in games"},
+		nextUp)
 	if gameLib.focus == 0 {
 		// X steps the look on the grid only; on a console's page X is LAN Play.
 		rows = append(rows, gameLibMenuRow{id: glmLook, title: "Next console look",
@@ -167,6 +178,19 @@ func gameLibMenuChoose(i int) {
 	case glmRescan:
 		refreshGameLibrary()
 		ShowToast(gameLibraryStatus(), ToastKindInfo)
+	case glmAudit:
+		romAuditStart()
+		openCommunityPanel(appConfig, communityPageROMAudit)
+	case glmNextUp:
+		game, days, ok := gameNextUpPick(gameLib.lib)
+		if !ok {
+			ShowToast("No backlog games yet — open a game's page and set its status to Backlog", ToastKindInfo)
+			return
+		}
+		gmetaOpenDetails(game)
+		ShowToast("Next up: "+game.Label()+" · "+gameWaitLabel(days), ToastKindInfo)
+	case glmJournal:
+		openCommunityPanel(appConfig, communityPageJournal)
 	case glmLook:
 		gameLibraryLookPress()
 	}

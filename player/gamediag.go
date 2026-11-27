@@ -1396,6 +1396,12 @@ func gameDiagPortDir(script string) (dir, rel string) {
 		return "", ""
 	}
 	value := filepath.ToSlash(string(m[1]))
+	// A port that builds GAMEDIR from another variable names its folder only
+	// once that is filled in: Half-Life sets PORTDIR="/$directory/ports/"
+	// and GAMEDIR="${PORTDIR}/Half-Life" (JH-AGE2UH).
+	if strings.Contains(value, "$") {
+		value = gameDiagPortExpand(value, gameDiagPortVars(head))
+	}
 	lower := strings.ToLower(value)
 	i := strings.LastIndex(lower, "/ports/")
 	switch {
@@ -1429,6 +1435,57 @@ func gameDiagPortDir(script string) (dir, rel string) {
 		}
 	}
 	return "", rel
+}
+
+// gameDiagPortVarRe finds a variable reference in a script line;
+// gameDiagPortVarNameRe is a variable's own name.
+var (
+	gameDiagPortVarRe     = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+	gameDiagPortVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+// gameDiagPortVars reads a port script's simple assignments (NAME="value",
+// with no command substitution) so a value built from one of them — GAMEDIR
+// from PORTDIR — can be read.
+func gameDiagPortVars(head []byte) map[string]string {
+	vars := map[string]string{}
+	for _, raw := range strings.Split(strings.ReplaceAll(string(head), "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(raw)
+		line = strings.TrimPrefix(line, "export ")
+		name, val, ok := strings.Cut(line, "=")
+		val = strings.TrimSpace(val)
+		if !ok || !gameDiagPortVarNameRe.MatchString(name) {
+			continue
+		}
+		if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
+			val = val[1 : len(val)-1]
+		} else if strings.ContainsAny(val, "\"' \t;") {
+			continue
+		}
+		if strings.Contains(val, "$(") || strings.ContainsRune(val, '`') {
+			continue // a command's output, not a path
+		}
+		vars[name] = val
+	}
+	return vars
+}
+
+// gameDiagPortExpand fills in the variables of vars, a few levels deep.
+func gameDiagPortExpand(value string, vars map[string]string) string {
+	for i := 0; i < 5 && strings.Contains(value, "$"); i++ {
+		next := gameDiagPortVarRe.ReplaceAllStringFunc(value, func(ref string) string {
+			name := strings.Trim(ref[1:], "{}")
+			if v, ok := vars[name]; ok {
+				return v
+			}
+			return ref
+		})
+		if next == value {
+			return value
+		}
+		value = next
+	}
+	return value
 }
 
 // gameDiagDirHasGameFiles reports whether dir holds a file other than notes
@@ -1501,7 +1558,24 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 		}
 		return finish("")
 	}
+	// A port that checks its own game data and stops when it is not there
+	// (gameDiagPortNeededFile): the message it prints for that goes to the
+	// screen, not to any log, so the file it wants is read from its script.
+	// Half-Life is one (a Smart Pro report, JH-AGE2UH).
+	need := gameDiagPortNeededFile(script, dir)
+	if need != "" {
+		report.Issues = append(report.Issues, launchIssue{
+			Level:  int(gameDiagLikely),
+			Title:  "The game's own files are not there yet",
+			Files:  []string{need},
+			Where:  dir,
+			Detail: "Its script stops here when the file below is not there. " + gameDiagPortDataDetail(dir, need),
+		})
+	}
 	for _, sub := range []string{"gamedata", "data", "assets", "game"} {
+		if need != "" {
+			break // the script already named the file it wants
+		}
 		data, ok := gameDiagFileIn(dir, sub)
 		if !ok {
 			continue
@@ -1509,15 +1583,11 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 		if info, err := os.Stat(data); err != nil || !info.IsDir() || gameDiagDirHasGameFiles(data, 2) {
 			continue
 		}
-		detail := "This port runs the original game's data, which PortMaster cannot ship. Copy the files the port's instructions list into this folder."
-		if p, ok := gameDiagFileIn(dir, "README.md"); ok {
-			detail += " The instructions: " + p
-		}
 		report.Issues = append(report.Issues, launchIssue{
 			Level:  int(gameDiagLikely),
 			Title:  "The game's own files are not there yet",
 			Where:  data,
-			Detail: detail,
+			Detail: gameDiagPortDataDetail(data, ""),
 		})
 		break
 	}
@@ -1530,6 +1600,49 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 		}
 	}
 	return finish(dir)
+}
+
+// gameDiagPortDataDetail says what a port that runs the original game's data
+// needs, and exactly where the files go: the folder named beside it, as the
+// card shows it with the card in a PC (Data/ports/<port>, or the port's
+// gamedata folder inside it). need is the file the port's script itself stops
+// without (gameDiagPortNeededFile), "" when the script checks nothing.
+func gameDiagPortDataDetail(dir, need string) string {
+	detail := "This port runs the original game's data, which PortMaster cannot ship. Copy the game's own files into this folder on the card"
+	if card := gameDiagPortCardPath(dir); card != "" {
+		detail += " (" + card + ")"
+	}
+	detail += ", keeping the folders they come in as they are in the copy you own."
+	if need != "" {
+		need = filepath.ToSlash(need)
+		detail += " The port stops until " + need + " is there"
+		if folder, _, ok := strings.Cut(need, "/"); ok {
+			detail += ": copy the folder it comes in (" + folder + "), not only the file"
+		}
+		detail += "."
+	}
+	detail += " Then start the port again."
+	if p, ok := gameDiagFileIn(dir, "README.md"); ok {
+		detail += " Its README lists which files: " + p
+	}
+	return detail
+}
+
+// gameDiagPortCardPath is a port folder as the card shows it: relative to the
+// SD card, so the path on the handheld matches the card read in a PC's file
+// manager (/mnt/SDCARD/Data/ports/Half-Life → Data/ports/Half-Life). A folder
+// outside the card is left as it is.
+func gameDiagPortCardPath(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if strings.TrimSpace(portMasterSDRoot) != "" {
+		if rel, err := filepath.Rel(portMasterSDRoot, dir); err == nil && rel != "." &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(dir)
 }
 
 // gameDiagPortAddOutput adds what a port printed to its report: the causes
@@ -1562,7 +1675,7 @@ func gameDiagPortAddOutput(report *gameDiagReport, notes, output []string, scrip
 			Title:  "The port is missing files",
 			Files:  gameDiagListFiles(files, 8),
 			Where:  dir,
-			Detail: "Named in the port's log. Game data goes in the port's folder (often a gamedata folder inside it); a missing .so library means this build does not suit the device.",
+			Detail: "Named in the port's log. If they are the game's own files, copy them into the folder above (a port with a gamedata folder wants them in it), keeping the game's folders; a missing .so library means this build does not suit the device.",
 		})
 	}
 	// The surest first.

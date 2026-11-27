@@ -100,6 +100,23 @@ func (p *webParser) addImageElement(style webStyle, src, alt string, attrW, attr
 	lineStyle := block.Style
 	block.Image = true
 	block.Style = style
+	// ensureBlock built this block from the surrounding text's style, so a
+	// positioned picture left its own insets and stacking behind and flowed
+	// as an ordinary image. A page's absolutely placed logo (Wikipedia's
+	// globe, `position:absolute; top:158px; left:35px` inside the wordmark
+	// block) then pushed every line below it, leaving a blank band where the
+	// picture should have overlapped the language grid. The image block is a
+	// lone positioned box: layoutLayers places it from these fields, keeping
+	// the wrapper box this block owns as its containing block
+	// (webpage_layers.go), and the flow keeps its room free.
+	if style.Position == webPositionAbsolute || style.Position == webPositionFixed {
+		block.Float = true
+		block.ZIndex = style.ZIndex
+		block.PosTop, block.PosRight = style.Top, style.Right
+		block.PosBottom, block.PosLeft = style.Bottom, style.Left
+		block.HasTop, block.HasRight = style.HasTop, style.HasRight
+		block.HasBottom, block.HasLeft = style.HasBottom, style.HasLeft
+	}
 	block.ImageSrc = src
 	block.ImageAlt = alt
 	block.ImageW, block.ImageH = attrW, attrH

@@ -132,10 +132,21 @@ func userConfigLatestVars() *UserVariables {
 // that assert a real save turn it back on for their own scope.
 var userConfigWritesEnabled = true
 
+// stripPlaytimeFromUserConfig drops the pre-LIB-13 playtime snapshot from a
+// user config on its way out. Playtime is its own file now (playtime_store.go),
+// so no save path writes (or keeps) it in jukauser.json; an old config's copy
+// is taken across once by playtimeInit and then removed here for good.
+func stripPlaytimeFromUserConfig(user *UserConfig) {
+	if user != nil && user.Variables.Custom != nil {
+		delete(user.Variables.Custom, playtimeCustomKey)
+	}
+}
+
 func saveUserConfigDebounced(user *UserConfig) {
 	if user == nil || !userConfigWritesEnabled {
 		return
 	}
+	stripPlaytimeFromUserConfig(user)
 	// The write runs on a timer goroutine two seconds from now, and the Custom
 	// map handed in is the live one the main thread keeps writing (playtime's
 	// counters every second, background updates, every keystroke). Iterating
@@ -1738,14 +1749,18 @@ func footerHintsWidth(font *ttf.Font, hints []FooterHint, groupGap, badgePad, ba
 // volatileCustomVars lists runtime-only keys that should not be persisted to
 // disk. They are reconstructed each session rather than saved.
 var volatileCustomVars = map[string]bool{
-	"search_results": true,
-	"app_entries":    true,
-	"fe_entries":     true,
-	"fe_path":        true,
-	"stream_url":     true,
-	"search_query":   true,
-	"search_error":   true,
-	"netspeed_text":  true,
+	// The pre-LIB-13 playtime snapshot. Playtime is its own file now, and no
+	// save path may put the key back into jukauser.json (playtimeInit reads it
+	// once from an old config, then deletes it).
+	playtimeCustomKey: true,
+	"search_results":  true,
+	"app_entries":     true,
+	"fe_entries":      true,
+	"fe_path":         true,
+	"stream_url":      true,
+	"search_query":    true,
+	"search_error":    true,
+	"netspeed_text":   true,
 	// What was typed into a web form (a password included) and the page text
 	// itself: both went into jukauser.json on every save, and Settings → Save
 	// put them in jukaconfig.json, which the live builder serves over Wi-Fi.
@@ -2007,6 +2022,7 @@ func saveUserConfig(user *UserConfig) {
 	if user == nil || !userConfigWritesEnabled {
 		return
 	}
+	stripPlaytimeFromUserConfig(user)
 	sections := user == userConfigCache
 	userConfigWriteMutex.Lock()
 	defer userConfigWriteMutex.Unlock()

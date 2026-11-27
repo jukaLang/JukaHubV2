@@ -1527,6 +1527,9 @@ func emuWinStartInstall(spec emuWinSpec) {
 	emuSetInstalling(spec.Name)
 	go func() {
 		defer endPatchOp()
+		// The radio stays as it is for the whole install: no per-update Wi-Fi
+		// switch, and no keeper reconnect moving it under the transfer.
+		defer wifiUserOpBegin()()
 		defer emuSetInstalling("")
 		ctx, cancel := context.WithTimeout(installBarRunContext(), emuWinInstallTimeout)
 		defer cancel()

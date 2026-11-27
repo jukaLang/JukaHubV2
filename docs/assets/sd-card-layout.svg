@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 660" width="1200" height="660" role="img" aria-labelledby="cardTitle cardDesc">
+  <title id="cardTitle">What JukaHub puts on the SD card</title>
+  <desc id="cardDesc">JukaHub is one folder, Apps/JukaHub, holding the program, its launcher, its config files and downloaded helpers. Everything else on the card, such as Roms, BIOS and Saves, is left alone. Games, BIOS files and media go in those existing folders.</desc>
+
+  <defs>
+    <style>
+      .h1 { font: 600 26px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #f4f7fb; }
+      .h2 { font: 600 16px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #f4f7fb; }
+      .lbl { font: 400 14px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #9aa6b6; }
+      .tree { font: 400 16px ui-monospace, 'SF Mono', Menlo, Consolas, monospace; fill: #cfe0f5; }
+      .treeDim { font: 400 16px ui-monospace, 'SF Mono', Menlo, Consolas, monospace; fill: #7d8ba1; }
+      .note { font: 400 15px 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; fill: #9aa6b6; }
+      .accent { fill: #7ef0cd; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="660" rx="24" fill="#0b0f18"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="658.5" rx="23.25" fill="none" stroke="#1e2839" stroke-width="1.5"/>
+
+  <text class="h1" x="60" y="72">What ends up on the card</text>
+  <text class="note" x="60" y="102">One new folder. Nothing moved, nothing replaced.</text>
+
+  <!-- SD card -->
+  <g>
+    <path d="M96 160 a16 16 0 0 1 16 -16 h150 l44 44 v336 a16 16 0 0 1 -16 16 h-178 a16 16 0 0 1 -16 -16 Z" fill="#121a28" stroke="#2c3a52" stroke-width="2"/>
+    <path d="M262 146 v28 a16 16 0 0 0 16 16 h28" fill="#0d1420" stroke="#2c3a52" stroke-width="2"/>
+    <g fill="#b08d57" opacity="0.85">
+      <rect x="124" y="170" width="18" height="30" rx="3"/>
+      <rect x="150" y="170" width="18" height="30" rx="3"/>
+      <rect x="176" y="170" width="18" height="30" rx="3"/>
+      <rect x="202" y="170" width="18" height="30" rx="3"/>
+      <rect x="228" y="170" width="18" height="30" rx="3"/>
+    </g>
+    <text class="lbl" x="130" y="238" style="font-size:12px; letter-spacing:2px">SD CARD</text>
+
+    <rect x="112" y="256" width="82" height="32" rx="7" fill="#123028" stroke="#25c2a0" stroke-width="1.5"/>
+    <text class="tree accent" x="126" y="278">Apps/</text>
+    <text class="tree" x="126" y="316">Roms/</text>
+    <text class="tree" x="126" y="354">BIOS/</text>
+    <text class="tree" x="126" y="392">Saves/</text>
+    <text class="tree" x="126" y="430">System/</text>
+    <text class="treeDim" x="126" y="468">…the rest</text>
+  </g>
+
+  <!-- arrow -->
+  <path d="M356 348 H404" stroke="#4b5a75" stroke-width="2.5" stroke-linecap="round" marker-end="url(#cardArrow)"/>
+  <defs>
+    <marker id="cardArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#4b5a75"/>
+    </marker>
+  </defs>
+
+  <!-- app folder -->
+  <text class="h2" x="432" y="172">Apps/JukaHub/</text>
+  <text class="lbl" x="432" y="196">the whole install: one folder</text>
+
+  <g class="tree">
+    <text x="432" y="244">├── JukaHub</text><text class="lbl" x="770" y="244">the program itself</text>
+    <text x="432" y="278">├── launch.sh</text><text class="lbl" x="770" y="278">how the Apps menu starts it</text>
+    <text x="432" y="312">├── config.json</text><text class="lbl" x="770" y="312">the entry in the Apps menu</text>
+    <text x="432" y="346">├── jukaconfig.json</text><text class="lbl" x="770" y="346">the interface: layouts, themes</text>
+    <text x="432" y="380">├── jukauser.json</text><text class="lbl" x="770" y="380">your settings, written on first run</text>
+    <text x="432" y="414">├── Inter-Regular.ttf</text><text class="lbl" x="770" y="414">the font; text breaks without it</text>
+    <text x="432" y="448">├── JukaPlayer.png</text><text class="lbl" x="770" y="448">the icon in the Apps menu</text>
+    <text x="432" y="482">├── background.jpg</text><text class="lbl" x="770" y="482">the default wallpaper</text>
+    <text x="432" y="516">├── required/</text><text class="lbl" x="770" y="516">yt-dlp and ffmpeg, fetched once</text>
+    <text x="432" y="550">└── data/</text><text class="lbl" x="770" y="550">saves, snapshots, profiles, caches</text>
+  </g>
+
+  <line x1="60" y1="586" x2="1140" y2="586" stroke="#18202e" stroke-width="1.5"/>
+  <text class="note" x="60" y="618">Games, BIOS files, saves and media go in the card's existing folders — Apps and everything else stay as they were.</text>
+</svg>

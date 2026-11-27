@@ -46,7 +46,15 @@ type notification struct {
 	// Key makes a newer row with the same key replace this one: one offer of
 	// an update, not one per start.
 	Key string
+	// Done, Total and Rate describe a live download. The notification centre
+	// draws a bar from them; the row is updated in place and removed when the
+	// run ends, so a percentage tick never grows the history.
+	Done, Total int64
+	Rate        float64
 }
+
+// notifDownloadKey is the in-place row for whatever the install bar is doing.
+const notifDownloadKey = "live-download"
 
 type notifCenter struct {
 	history   []notification
@@ -121,6 +129,67 @@ func notifRecord(msg string, p notifPriority) {
 	notifRecordAs(msg, p, false)
 }
 
+// notifUpdateDownload keeps one live download row in the notification centre.
+// It does not file a toast: the install bar and this row are the same progress,
+// and a percent toast on top of them was the duplicate people saw.
+func notifUpdateDownload(label string, done, total int64, speed float64) {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "Downloading"
+	}
+	notifEnsureLoaded()
+	notifHistoryMu.Lock()
+	now := time.Now()
+	found := -1
+	for i := range nc.history {
+		if nc.history[i].Key == notifDownloadKey {
+			found = i
+			break
+		}
+	}
+	changed := false
+	if found < 0 {
+		notifSeq++
+		nc.history = append([]notification{{
+			Message: label, Priority: notifInfo, Read: true, Source: "Downloads",
+			Action: notifAction{}, Key: notifDownloadKey, ID: notifSeq,
+			Timestamp: now, Repeat: 1, Done: done, Total: total, Rate: speed,
+		}}, nc.history...)
+		notifAdded++
+		changed = true
+	} else {
+		n := &nc.history[found]
+		n.Message, n.Done, n.Total, n.Rate = label, done, total, speed
+		n.Timestamp, n.Read = now, true
+	}
+	// Percent ticks are frequent: only wake the store writer now and then.
+	if !changed && time.Since(notifProgressSavedAt) > time.Second {
+		notifProgressSavedAt = now
+		changed = true
+	}
+	notifHistoryMu.Unlock()
+	if changed {
+		notifChanged()
+	}
+}
+
+// notifFinishDownload removes the live row when the run ends.
+func notifFinishDownload() {
+	notifEnsureLoaded()
+	notifHistoryMu.Lock()
+	kept := nc.history[:0]
+	for _, n := range nc.history {
+		if n.Key != notifDownloadKey {
+			kept = append(kept, n)
+		}
+	}
+	nc.history = kept
+	notifHistoryMu.Unlock()
+	notifChanged()
+}
+
+var notifProgressSavedAt time.Time
+
 // notifRecordToast files a toast the user just watched appear. Confirmations
 // (info and success: "Saved", "Copied", "Connected") go into the history
 // already read, so they can be re-read but do not raise the bell's count; the
@@ -161,7 +230,13 @@ func notifFile(n notification) {
 	notifHistoryMu.Lock()
 	if len(nc.history) > 0 {
 		top := &nc.history[0]
-		if top.Message == n.Message && top.Priority == n.Priority && top.Read == n.Read && top.Action == n.Action {
+		// A live download row is replaced in place by its own writer. Folding
+		// an ordinary toast into it would make that toast vanish when the
+		// download ends and the row is removed.
+		if top.Key == notifDownloadKey {
+			top = nil
+		}
+		if top != nil && top.Message == n.Message && top.Priority == n.Priority && top.Read == n.Read && top.Action == n.Action {
 			top.Timestamp = time.Now()
 			top.Repeat++
 			keep := notifKeeps(*top)
@@ -509,6 +584,8 @@ const (
 	// stop at two lines, so the end of a long error could not be read anywhere.
 	notifMsgLines = 2
 	notifRowPad   = int32(8)
+	// notifBarH is the progress rail drawn inside a live download row.
+	notifBarH = int32(8)
 )
 
 // notifRowLayout is one history row's measured geometry: the wrapped message
@@ -632,7 +709,11 @@ func notifMeasureRows(font *ttf.Font, history []notification, maxW int32, cursor
 			limit = max(expanded, notifMsgLines)
 		}
 		lines := notifWrapLines(font, notifRowMessage(n), maxW, limit)
-		rows = append(rows, notifRowLayout{lines: lines, height: notifRowHeight(len(lines), lineH)})
+		height := notifRowHeight(len(lines), lineH)
+		if n.Key == notifDownloadKey && n.Total > 0 {
+			height += notifBarH + 4
+		}
+		rows = append(rows, notifRowLayout{lines: lines, height: height})
 	}
 	return rows
 }
@@ -897,6 +978,27 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 			// the line's far end: a pill on the highlighted row (A runs it, a
 			// tap too), the accent word on the others.
 			timeY := ry + notifRowPad + int32(len(row.lines))*lineH + 2
+			if n.Key == notifDownloadKey && n.Total > 0 {
+				barW := rowW - 48
+				if barW > 40 {
+					frac := float64(n.Done) / float64(n.Total)
+					if frac > 1 {
+						frac = 1
+					}
+					fillRoundedRect(renderer, bx+32, timeY, barW, notifBarH, notifBarH/2, ColorTrack)
+					if frac > 0 {
+						fillW := int32(float64(barW-4) * frac)
+						if fillW < notifBarH {
+							fillW = notifBarH
+						}
+						fillRoundedRect(renderer, bx+34, timeY+2, fillW, notifBarH-4, (notifBarH-4)/2, installHighlight())
+					}
+					pct := fmt.Sprintf("%d%%", int(frac*100+0.5))
+					pw, _, _ := font.SizeUTF8(pct)
+					renderText(renderer, config, font, pct, installHighlight(), bx+32+barW-int32(pw), timeY-2)
+				}
+				timeY += notifBarH + 4
+			}
 			renderText(renderer, config, font, notifAgo(n.Timestamp),
 				WithAlpha(ColorTextTertiary(), 150), bx+32, timeY)
 			if label := n.Action.Label; label != "" {

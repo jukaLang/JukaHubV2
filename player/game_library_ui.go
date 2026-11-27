@@ -49,10 +49,16 @@ type gameLibrarySystemsKey struct {
 	showHidden bool
 	tag        string
 	gmetaRev   uint64
+	// collections is gameLibraryCollectionsKey: the automatic-collection
+	// switches and the user store's generation (game_library_collections.go).
+	collections string
 }
 
 type gameLibraryPanel struct {
-	open       bool
+	open bool
+	// cfg is the config of the last frame drawn, for the collection rows the
+	// settings gate (game_library_collections.go). Nil before the first frame.
+	cfg        *Config
 	lib        gameLibraryReport
 	recents    []recentGame
 	system     int
@@ -175,11 +181,12 @@ var libraryArtworkRoot = romArtworkDir
 
 func currentGameSystems() []librarySystem {
 	key := gameLibrarySystemsKey{
-		scan:       gameLib.scanGen,
-		query:      gameLib.query,
-		showHidden: libraryShowHidden(),
-		tag:        gmetaFilterTag(),
-		gmetaRev:   gmetaRev(),
+		scan:        gameLib.scanGen,
+		query:       gameLib.query,
+		showHidden:  libraryShowHidden(),
+		tag:         gmetaFilterTag(),
+		gmetaRev:    gmetaRev(),
+		collections: gameLibraryCollectionsKey(gameLib.cfg),
 	}
 	if gameLib.systemsValid && gameLib.systemsKey == key {
 		return gameLib.systemsCache
@@ -189,6 +196,12 @@ func currentGameSystems() []librarySystem {
 	// T, gmeta_ui.go) narrows what the search leaves; it returns the list untouched
 	// when no tag is chosen.
 	systems := filterHiddenLibrarySystems(librarySystemsForUI(gameLib.lib, gameLib.recents), key.showHidden)
+	// The collections Home shows come first, after Continue (they are views of
+	// the same games, so a search or a tag filter leaves them out: their games
+	// would be a second copy of the hits).
+	if gameLib.query == "" && key.tag == "" {
+		systems = withGameLibraryCollections(systems, gameLib.cfg)
+	}
 	systems = gmetaFilterSystems(filterLibrarySystems(systems, gameLib.query))
 	systems = uiModeKidSystems(systems) // Kid mode: the games for kids only (uimode_kids.go)
 	gameLib.systemsCache, gameLib.systemsKey, gameLib.systemsValid = systems, key, true
@@ -219,7 +232,7 @@ func filterLibrarySystems(systems []librarySystem, query string) []librarySystem
 	}
 	filtered := make([]librarySystem, 0, len(systems))
 	for _, system := range systems {
-		if system.Name == continueSystemName {
+		if system.Name == continueSystemName || system.Collection != "" {
 			continue
 		}
 		consoleMatch := strings.Contains(normalizeGameSearch(system.Name), needle) || strings.Contains(normalizeGameSearch(consoleDisplayName(system.Name)), needle)
@@ -235,9 +248,10 @@ func filterLibrarySystems(systems []librarySystem, query string) []librarySystem
 			continue
 		}
 		filtered = append(filtered, librarySystem{
-			Name:    system.Name,
-			Games:   games,
-			WithArt: countCoveredGames(games),
+			Name:       system.Name,
+			Games:      games,
+			WithArt:    countCoveredGames(games),
+			Collection: system.Collection,
 		})
 	}
 	return filtered
@@ -1520,6 +1534,15 @@ func librarySystemGlyph(name string) string {
 	return iconEmuGlyphFor(name)
 }
 
+// librarySystemRowGlyph is librarySystemGlyph with the collection rows' own
+// glyph (game_library_collections.go).
+func librarySystemRowGlyph(system librarySystem) string {
+	if system.Collection != "" {
+		return homeTabsGlyph("folder")
+	}
+	return librarySystemGlyph(system.Name)
+}
+
 // librarySystemCoverScan bounds the search for a console button's cover, so a
 // big console without covers costs a few comparisons per frame, not a walk.
 const librarySystemCoverScan = 64
@@ -1561,6 +1584,14 @@ func gameLibrarySystemStatus(system librarySystem) string {
 		return gameLibraryStatus()
 	}
 	status := gameLibraryTileMeta(system)
+	if system.Collection != "" {
+		// A collection is a view of the library, not a console: say where it
+		// comes from rather than how many of its games have covers.
+		if homeTabsIsAuto(system.Collection) {
+			status = "Auto · " + status
+		}
+		return status + " · sorted by " + strings.ToLower(librarySortLabel())
+	}
 	if n := len(system.Games); n > 0 && system.Name != builtInLibrarySystem {
 		status += " · " + itoa(coverPercent(system.WithArt, n)) + "% with covers"
 	}
@@ -1782,7 +1813,7 @@ func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system li
 	if focused {
 		ink = accent
 	}
-	drawHomeGlyphTinted(renderer, librarySystemGlyph(system.Name), glyphBox, ink)
+	drawHomeGlyphTinted(renderer, librarySystemRowGlyph(system), glyphBox, ink)
 
 	// Bottom up: the cover meter, the count, then the name over them.
 	bottom := rect.Y + rect.H - pad
@@ -1899,6 +1930,9 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if !gameLib.open || renderer == nil {
 		return
 	}
+	// The collection rows are built from the settings this frame is drawn
+	// with, so a switch changed in Settings applies on the next frame.
+	gameLib.cfg = config
 	// A fetch that finished after the last frame turned placeholder tiles into
 	// real covers. The textures must be released on the render thread, so the
 	// reload happens here rather than in the downloader.
@@ -1944,7 +1978,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	innerW := screenWidth - 2*margin
 	header := UIPanelHeader("Games", gameLibraryStatus(), "gamepad")
 	if gameLib.focus == 1 {
-		header = UIPanelHeader(consoleDisplayName(system.Name), gameLibrarySystemStatus(system), librarySystemGlyph(system.Name))
+		header = UIPanelHeader(consoleDisplayName(system.Name), gameLibrarySystemStatus(system), librarySystemRowGlyph(system))
 	}
 	header.X, header.Y, header.W = margin, top+6, innerW
 	band := uiPageHeaderMetricsFor(config, header)
@@ -2114,6 +2148,9 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 			}
 			if game.Hidden {
 				detail += " · Hidden"
+			}
+			if status := game.JournalStatus; status != "" {
+				detail += " · " + status
 			}
 			// A per-game clock is worth seeing in the list: it explains why
 			// this title runs cooler than the one above it.

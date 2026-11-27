@@ -5,11 +5,42 @@ plugin needs a directory containing a `plugin.json` manifest and an entry script
 The runner captures the script's output and shows it as a toast. It does **not**
 automatically create buttons for the plugin or let scripts draw a UI.
 
+## Installing a plugin from the card
+
+**Community → Plugin catalog** lists plugins you have placed in
+`<data>/plugin-catalog` (on Windows, `%APPDATA%\JukaHub\plugin-catalog`). Each
+folder needs a `plugin.json` manifest and the entry script it names. **A**
+copies the highlighted folder into `plugins/`; it never overwrites a plugin
+that is already installed, and a manifest with a problem is listed with the
+reason instead of being hidden. Files over 2 MB, folders over 16 MB and
+symlinks are refused. Nothing is fetched from the network: this is a way to
+install a plugin someone handed you on a card, not an automatic store.
+
 > **Trust first:** plugins run with JukaHub's permissions, inherit its
 > environment and can read or modify accessible files or use the network. They
 > are not sandboxed or automatically verified. Install only code you trust.
 > Custom variables are also passed on the command line and may be visible to
 > other processes; do not put secrets in them or print them in plugin output.
+
+## Video sites from plugins
+
+Downloads already accept any `http` or `https` video link that yt-dlp can read;
+nothing is YouTube-only. A plugin can advertise the other sites it supports by
+adding `"videoHosts"` to its manifest:
+
+```json
+{
+  "videoHosts": ["vimeo.com", "dailymotion.com", "*.example.org"]
+}
+```
+
+Each entry is a host name only — no scheme, port, path or credentials — and a
+leading `*.` covers subdomains. Up to 16 hosts per plugin are read; a bad entry
+is reported on the plugin's card and skipped. Switched-on plugins' hosts appear
+on the Plugins card, in **Settings → Media & playback → Video sites from
+plugins**, and are used to label downloads that come from those sites. This is
+a label, not a permission: JukaHub never passes the host list to yt-dlp as an
+argument, and no plugin can add yt-dlp command-line options through it.
 
 ## What switching a plugin on does
 

@@ -446,6 +446,7 @@ func libraryDecorateGames(games []libraryGame, seconds map[string]int64) {
 		if rec, ok := gmetaGet(game.System, game.Title); ok {
 			game.Rating = rec.Rating
 			game.Year = libraryParseYear(rec.Year)
+			game.JournalStatus = gmetaStatus(rec)
 		}
 	}
 	sortLibraryGames(games, librarySortMode())

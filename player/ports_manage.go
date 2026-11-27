@@ -429,6 +429,32 @@ func portWhyReport(name, script string) gameDiagReport {
 			Detail: detail,
 		})
 	}
+	// The folder its game files go in, before one is found missing: the
+	// diagnosis names a folder only once a data folder is there and empty or
+	// the script checks for a file, and a port with neither leaves the player
+	// to guess where a copy goes.
+	if meta.Dir != "" {
+		haveData := false
+		for _, is := range report.Issues {
+			if is.Title == "The game's own files are not there yet" {
+				haveData = true
+				break
+			}
+		}
+		folder, sub := portGameDataFolder(meta.Dir)
+		if !haveData && !gameDiagDirHasGameFiles(folder, 2) {
+			what := "the port's folder"
+			if sub != "" {
+				what = "its " + sub + " folder"
+			}
+			report.Issues = append(report.Issues, launchIssue{
+				Level:  int(gameDiagMaybe),
+				Title:  "Where its game files go",
+				Where:  folder,
+				Detail: "This port runs the original game's data. Copy the game's own files into " + what + " on the card (" + gameDiagPortCardPath(folder) + "), keeping the folders they come in, then start the port again.",
+			})
+		}
+	}
 	if len(report.LogLines) == 0 {
 		if p := portLogPath(name, script); p != "" {
 			if lines := gameDiagReadTail(p, time.Time{}); len(lines) > 0 {

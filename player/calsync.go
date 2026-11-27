@@ -55,6 +55,10 @@ type calEvent struct {
 	Color                               string // "#rrggbb" or ""
 	Start, End                          time.Time
 	AllDay                              bool
+	// CalDAV write-back (MAIL-2): the resource URL and its ETag.
+	URL        string `json:"url,omitempty"`
+	ETag       string `json:"etag,omitempty"`
+	SourceKind string `json:"source_kind,omitempty"`
 }
 
 const (
@@ -75,7 +79,7 @@ type calSource struct {
 	key     string // cache key: "a-<account>", "c-<calendar>", "f-<file>"
 	storeID string // account or calendar ID for the error ("" for a file)
 	account bool
-	kind    string // mailcalCalICS, mailcalCalCalDAV, or "file"
+	kind    string // mailcalCalICS, mailcalCalCalDAV, "graph", or "file"
 	name    string
 	color   string
 	url     string
@@ -83,6 +87,9 @@ type calSource struct {
 	pass    string
 	path    string
 	help    string // where to make an app password (account presets)
+	// Microsoft Graph (MAIL-2)
+	isMS      bool
+	msAccount mailcalAccount
 }
 
 // calCacheFile is events-<key>.json.
@@ -189,6 +196,17 @@ func calSyncSources(s mailcalSettings) []calSource {
 			src.help = p.PasswordHelp
 		}
 		out = append(out, src)
+	}
+	// Microsoft accounts get a writable default calendar through Graph.
+	for _, a := range s.Accounts {
+		if a.OAuth != mailcalOAuthMicrosoft || a.CalOff {
+			continue
+		}
+		out = append(out, calSource{
+			key: "g-" + calSyncSafeName(a.ID), storeID: a.ID, account: true,
+			kind: mailcalCalGraph, name: a.label() + " (Outlook)",
+			isMS: true, msAccount: a,
+		})
 	}
 	for _, c := range s.Calendars {
 		if c.Off || (c.Kind != mailcalCalICS && c.Kind != mailcalCalCalDAV) {
@@ -749,6 +767,8 @@ func calFetchSource(ctx context.Context, src calSource, from, to time.Time, etag
 		return calFetchICS(ctx, src.url, src.user, src.pass, etag, from, to)
 	case mailcalCalCalDAV:
 		return calFetchCalDAV(ctx, src.url, src.user, src.pass, from, to)
+	case mailcalCalGraph:
+		return calFetchGraph(ctx, src.msAccount, from, to)
 	}
 	return res, errors.New("unknown kind of calendar")
 }
@@ -833,6 +853,13 @@ func calFetchICS(ctx context.Context, raw, user, pass, etag string, from, to tim
 }
 
 // calCalDAVClient checks a CalDAV address and login and makes the client.
+// caldavWriteHTTPClient is the seam tests use to inject a TLS client that trusts
+// a loopback CA. Defaults to the normal CalDAV client.
+var caldavWriteHTTPClient = func() *http.Client {
+	_, c := calHTTPClients()
+	return c
+}
+
 func calCalDAVClient(raw, user, pass string) (*caldavClient, error) {
 	raw = strings.TrimSpace(raw)
 	if !strings.Contains(raw, "://") {
@@ -1195,4 +1222,119 @@ func calSafeText(s string, max int) string {
 		n++
 	}
 	return b.String()
+}
+
+// ── MAIL-2 write-back (CalDAV) ────────────────────────────────────────────
+
+// calsyncCalDAVWritable reports whether a source accepts writes. Only CalDAV
+// calendars do; .ics subscriptions and loose files are read-only.
+func calsyncCalDAVWritable(src calSource) bool {
+	return src.kind == mailcalCalCalDAV
+}
+
+// calsyncWritable reports whether a source accepts writes (CalDAV or Graph).
+func calsyncWritable(src calSource) bool {
+	return src.kind == mailcalCalCalDAV || src.kind == mailcalCalGraph
+}
+
+// calEventToICS serialises one event as a minimal VCALENDAR. Used to create or
+// replace a resource on a CalDAV server.
+func calEventToICS(ev calEvent) string {
+	uid := strings.TrimSpace(ev.UID)
+	if uid == "" {
+		uid = fmt.Sprintf("jukahub-%d", time.Now().UnixNano())
+	}
+	fmtTime := func(t time.Time, allDay bool) string {
+		if allDay {
+			return t.UTC().Format("20060102")
+		}
+		return t.UTC().Format("20060102T150405Z")
+	}
+	lines := []string{
+		"BEGIN:VCALENDAR",
+		"VERSION:2.0",
+		"PRODID:-//JukaHub//Calendar//EN",
+		"BEGIN:VEVENT",
+		"UID:" + uid,
+		"SUMMARY:" + ev.Title,
+	}
+	if ev.AllDay {
+		lines = append(lines, "DTSTART;VALUE=DATE:"+fmtTime(ev.Start, true))
+		lines = append(lines, "DTEND;VALUE=DATE:"+fmtTime(ev.End, true))
+	} else {
+		lines = append(lines, "DTSTART:"+fmtTime(ev.Start, false))
+		lines = append(lines, "DTEND:"+fmtTime(ev.End, false))
+	}
+	if loc := strings.TrimSpace(ev.Location); loc != "" {
+		lines = append(lines, "LOCATION:"+loc)
+	}
+	if notes := strings.TrimSpace(ev.Notes); notes != "" {
+		lines = append(lines, "DESCRIPTION:"+notes)
+	}
+	lines = append(lines, "END:VEVENT", "END:VCALENDAR")
+	return strings.Join(lines, "\r\n") + "\r\n"
+}
+
+// calsyncPushEvent creates or updates one event on a writable CalDAV source.
+// On success it returns the event with its resource URL and ETag filled in.
+// A 412 conflict is returned as *caldavConflictError so the caller can re-sync.
+func calsyncPushEvent(ctx context.Context, src calSource, ev calEvent) (calEvent, error) {
+	if src.kind == mailcalCalGraph {
+		return calsyncPushGraph(ctx, src, ev)
+	}
+	if !calsyncCalDAVWritable(src) {
+		return ev, errors.New("this calendar is read-only")
+	}
+	if strings.TrimSpace(src.url) == "" || strings.TrimSpace(src.user) == "" {
+		return ev, errors.New("this calendar has no CalDAV address")
+	}
+	c := &caldavClient{origin: caldavMustParseURL(src.url), user: src.user, pass: src.pass, http: caldavWriteHTTPClient()}
+	ics := calEventToICS(ev)
+	if ev.UID == "" {
+		ev.UID = calEventUIDFromICS(ics)
+	}
+	href := strings.TrimSpace(ev.URL)
+	if href == "" {
+		base := strings.TrimRight(src.url, "/")
+		href = base + "/" + ev.UID + ".ics"
+	}
+	newETag, err := c.putEvent(ctx, href, ics, ev.ETag)
+	if err != nil {
+		return ev, err
+	}
+	ev.URL = href
+	ev.ETag = newETag
+	return ev, nil
+}
+
+// calsyncDeleteEvent removes one event resource from a writable CalDAV source.
+func calsyncDeleteEvent(ctx context.Context, src calSource, ev calEvent) error {
+	if src.kind == mailcalCalGraph {
+		return calsyncDeleteGraph(ctx, src, ev)
+	}
+	if !calsyncCalDAVWritable(src) {
+		return errors.New("this calendar is read-only")
+	}
+	if strings.TrimSpace(ev.URL) == "" {
+		return errors.New("this event has no CalDAV resource")
+	}
+	c := &caldavClient{origin: caldavMustParseURL(src.url), user: src.user, pass: src.pass, http: caldavWriteHTTPClient()}
+	return c.deleteEvent(ctx, ev.URL, ev.ETag)
+}
+
+func calEventUIDFromICS(ics string) string {
+	for _, line := range strings.Split(ics, "\n") {
+		if strings.HasPrefix(line, "UID:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "UID:"))
+		}
+	}
+	return ""
+}
+
+func caldavMustParseURL(raw string) *url.URL {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil {
+		return &url.URL{}
+	}
+	return u
 }

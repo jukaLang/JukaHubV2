@@ -23,7 +23,9 @@ package main
 // second hint line, and still fits under the clock on 1280x720 and 1024x768.
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -274,6 +276,82 @@ func calEvSyncNow() {
 	PlayActivateSound()
 }
 
+// calEvAdd is A on a writable calendar: create an event on the selected day.
+func calEvAdd() {
+	var src *calSource
+	for _, s := range calSyncSources(mailcalSettingsGet()) {
+		if calsyncWritable(s) {
+			cp := s
+			src = &cp
+			break
+		}
+	}
+	if src == nil {
+		ShowToast("No writable calendar — add a CalDAV or Microsoft calendar", ToastKindInfo)
+		return
+	}
+	day := time.Date(calEvSel.y, calEvSel.m, calEvSel.d, 9, 0, 0, 0, time.Local)
+	ev := calEvent{Title: "New event", Start: day, End: day.Add(time.Hour)}
+	PlayActivateSound()
+	go func(s calSource, e calEvent) {
+		got, err := calsyncPushEvent(context.Background(), s, e)
+		if err != nil {
+			ShowToast("Could not add event: "+err.Error(), ToastKindWarning)
+			return
+		}
+		_ = got
+		calSyncNow("calendar")
+		ShowToast("Event added", ToastKindInfo)
+	}(*src, ev)
+}
+
+// calEvDelete is D: remove the picked event from its calendar.
+func calEvDelete() {
+	ev, ok := calEvPicked()
+	if !ok {
+		ShowToast("No event on this day", ToastKindInfo)
+		return
+	}
+	if strings.TrimSpace(ev.URL) == "" {
+		ShowToast("This event cannot be edited on the server", ToastKindInfo)
+		return
+	}
+	var src *calSource
+	// Prefer the backend that owns this event.
+	if ev.SourceKind != "" {
+		for _, s := range calSyncSources(mailcalSettingsGet()) {
+			if calsyncWritable(s) && s.kind == ev.SourceKind {
+				cp := s
+				src = &cp
+				break
+			}
+		}
+	}
+	// Fall back to the first writable source.
+	if src == nil {
+		for _, s := range calSyncSources(mailcalSettingsGet()) {
+			if calsyncWritable(s) {
+				cp := s
+				src = &cp
+				break
+			}
+		}
+	}
+	if src == nil {
+		ShowToast("No writable calendar", ToastKindInfo)
+		return
+	}
+	PlayActivateSound()
+	go func(s calSource, e calEvent) {
+		if err := calsyncDeleteEvent(context.Background(), s, e); err != nil {
+			ShowToast("Could not delete event: "+err.Error(), ToastKindWarning)
+			return
+		}
+		calSyncNow("calendar")
+		ShowToast("Event deleted", ToastKindInfo)
+	}(*src, ev)
+}
+
 // calendarPopoverKey handles the popover's keys while it is open. It runs before
 // the scene's own input on every screen, because the popover floats above them
 // all. Keys it does not name are left alone, so typing in a text field behind
@@ -311,6 +389,14 @@ func calendarPopoverKey(e *sdl.KeyboardEvent) bool {
 	case sdl.K_x:
 		if e.Repeat == 0 {
 			calEvSyncNow()
+		}
+	case sdl.K_a:
+		if e.Repeat == 0 {
+			calEvAdd()
+		}
+	case sdl.K_d:
+		if e.Repeat == 0 {
+			calEvDelete()
 		}
 	case sdl.K_ESCAPE, sdl.K_b:
 		homeCalendarOpen = false

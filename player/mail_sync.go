@@ -133,6 +133,9 @@ func mailStart() {
 		// main loop reads.
 		tbxPost(func() { msOAuthLoad(appConfig) })
 		go mailRunLoop()
+		// Push mail (LIB/MAIL-3) sits on top of the poll loop, which stays
+		// the fallback.
+		mailIdleStart()
 	})
 }
 

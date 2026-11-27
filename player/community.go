@@ -26,6 +26,13 @@ const (
 	communityPageHome communityPage = iota
 	communityPageChangelog
 	communityPageBIOSDoctor
+	communityPageROMAudit
+	communityPageJournal
+	communityPageSteamAch
+	communityPagePluginMarket
+	communityPageOfflineRef
+	communityPageWineComponents
+	communityPageWineApps
 	communityPageDiagnosticsQR
 )
 
@@ -34,6 +41,11 @@ type communityAction int
 const (
 	communityActionWhatsNew communityAction = iota
 	communityActionBIOSDoctor
+	communityActionPluginCatalog
+	communityActionOfflineRef
+	communityActionCastReceiver
+	communityActionWineComponents
+	communityActionWineApps
 	communityActionDiagnosticsQR
 	communityActionReportBug
 	communityActionTelemetry
@@ -92,6 +104,41 @@ func communityRows(config *Config) []communityRow {
 			detail: "Check required filenames and SHA-256 fingerprints",
 			hint:   hintLine(FooterHint{"A", "Inspect"}),
 			action: communityActionBIOSDoctor,
+		},
+		{
+			label:  "Plugin catalog",
+			value:  "Install from <data>/plugin-catalog",
+			detail: "Local plugins only: nothing is downloaded and plugins are not sandboxed",
+			hint:   hintLine(FooterHint{"A", "Browse"}),
+			action: communityActionPluginCatalog,
+		},
+		{
+			label:  "Offline reference",
+			value:  "Read from <data>/reference",
+			detail: "Local text and saved pages; no network, no scripts",
+			hint:   hintLine(FooterHint{"A", "Read"}),
+			action: communityActionOfflineRef,
+		},
+		{
+			label:  "Cast receiver",
+			value:  "Show a phone picture fullscreen",
+			detail: "Open /cast on the phone, enter the PIN and send a PNG or JPEG",
+			hint:   hintLine(FooterHint{"A", "Wait"}),
+			action: communityActionCastReceiver,
+		},
+		{
+			label:  "WINE components",
+			value:  "Optional downloads you list",
+			detail: "Install from an HTTPS URL with a SHA-256; nothing is fetched automatically",
+			hint:   hintLine(FooterHint{"A", "Install"}),
+			action: communityActionWineComponents,
+		},
+		{
+			label:  "Wine apps",
+			value:  "Free Windows programs to try",
+			detail: "Open-source tools from their own sites; nothing is downloaded here",
+			hint:   hintLine(FooterHint{"A", "Browse"}),
+			action: communityActionWineApps,
 		},
 		{
 			label:  "Diagnostics QR",
@@ -177,6 +224,28 @@ func communityPanelActivate(config *Config) {
 		biosScanStart()
 		communityPanel.page = communityPageBIOSDoctor
 		communityPanel.scroll = 0
+	case communityActionPluginCatalog:
+		plugMarketUI.cursor = 0
+		communityPanel.page = communityPagePluginMarket
+		communityPanel.scroll = 0
+		PlayActivateSound()
+	case communityActionOfflineRef:
+		offlineRefUI.cursor, offlineRefUI.open, offlineRefUI.lines = 0, false, nil
+		communityPanel.page = communityPageOfflineRef
+		communityPanel.scroll = 0
+		PlayActivateSound()
+	case communityActionCastReceiver:
+		castReceiverShow("", "")
+	case communityActionWineComponents:
+		wineComponentsUI.cursor = 0
+		communityPanel.page = communityPageWineComponents
+		communityPanel.scroll = 0
+		PlayActivateSound()
+	case communityActionWineApps:
+		wineAppCatalogUI.cursor = 0
+		communityPanel.page = communityPageWineApps
+		communityPanel.scroll = 0
+		PlayActivateSound()
 	case communityActionDiagnosticsQR:
 		prepareCommunityDiagnosticsQR(config)
 		communityPanel.page = communityPageDiagnosticsQR
@@ -298,6 +367,161 @@ func handleCommunityKey(e *sdl.KeyboardEvent, config *Config) bool {
 		}
 		return true
 	}
+	if communityPanel.page == communityPageROMAudit {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			communityPanel.scroll -= 2
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.K_DOWN:
+			communityPanel.scroll += 2
+		case sdl.K_PAGEUP:
+			communityPanel.scroll -= 10
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.K_PAGEDOWN:
+			communityPanel.scroll += 10
+		case sdl.K_HOME:
+			communityPanel.scroll = 0
+		case sdl.K_END:
+			communityPanel.scroll = 1 << 20
+		case sdl.K_y:
+			romAuditStart()
+		case sdl.K_x:
+			romAuditExport()
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_SPACE:
+			closeCommunityPanel()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageJournal || communityPanel.page == communityPageSteamAch {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			communityPanel.scroll -= 2
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.K_DOWN:
+			communityPanel.scroll += 2
+		case sdl.K_PAGEUP:
+			communityPanel.scroll -= 10
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.K_PAGEDOWN:
+			communityPanel.scroll += 10
+		case sdl.K_HOME:
+			communityPanel.scroll = 0
+		case sdl.K_END:
+			communityPanel.scroll = 1 << 20
+		case sdl.K_x:
+			if communityPanel.page == communityPageJournal {
+				journalSave()
+			}
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_SPACE:
+			closeCommunityPanel()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageWineApps {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			wineAppCatalogMove(-1)
+		case sdl.K_DOWN:
+			wineAppCatalogMove(1)
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+			wineAppCatalogOpen()
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageWineComponents {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			wineComponentsMove(-1)
+		case sdl.K_DOWN:
+			wineComponentsMove(1)
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+			wineComponentsActivate()
+		case sdl.K_x:
+			wineComponentsVerify()
+		case sdl.K_y:
+			if err := wineComponentsCreateTemplate(); err != nil {
+				ShowToast("Could not make the example list: "+firstLine(err.Error()), ToastKindError)
+			} else {
+				ShowToast("Example components.json written — fill in its SHA-256", ToastKindSuccess)
+			}
+		case sdl.K_DELETE:
+			wineComponentsRemove()
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
+	if communityPanel.page == communityPagePluginMarket {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			plugMarketMove(-1)
+		case sdl.K_DOWN:
+			plugMarketMove(1)
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+			plugMarketActivate()
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageOfflineRef {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			if offlineRefUI.open {
+				communityPanel.scroll -= 2
+				if communityPanel.scroll < 0 {
+					communityPanel.scroll = 0
+				}
+			} else {
+				offlineRefMove(-1)
+			}
+		case sdl.K_DOWN:
+			if offlineRefUI.open {
+				communityPanel.scroll += 2
+			} else {
+				offlineRefMove(1)
+			}
+		case sdl.K_PAGEUP:
+			communityPanel.scroll -= 10
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.K_PAGEDOWN:
+			communityPanel.scroll += 10
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+			if offlineRefUI.open {
+				offlineRefClose()
+			} else {
+				offlineRefOpen()
+				communityPanel.scroll = 0
+			}
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
+			if offlineRefUI.open {
+				offlineRefClose()
+			} else {
+				communityPanel.page = communityPageHome
+				communityPanel.cursor = 0
+				PlayBackSound()
+			}
+		}
+		return true
+	}
 	if communityPanel.page == communityPageDiagnosticsQR {
 		// The code is the page's only control: A/Enter enlarges it, B backs
 		// out to the list. Selecting the code used to mean leaving the page.
@@ -355,6 +579,146 @@ func handleCommunityKey(e *sdl.KeyboardEvent, config *Config) bool {
 func ctrlCommunity(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || !communityPanel.open {
 		return false
+	}
+	if communityPanel.page == communityPageROMAudit {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			communityPanel.scroll -= 2
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			communityPanel.scroll += 2
+		case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+			communityPanel.scroll -= 10
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+			communityPanel.scroll += 10
+		case sdl.CONTROLLER_BUTTON_Y:
+			romAuditStart()
+		case sdl.CONTROLLER_BUTTON_X:
+			romAuditExport()
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			closeCommunityPanel()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageJournal || communityPanel.page == communityPageSteamAch {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			communityPanel.scroll -= 2
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			communityPanel.scroll += 2
+		case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+			communityPanel.scroll -= 10
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+			communityPanel.scroll += 10
+		case sdl.CONTROLLER_BUTTON_X:
+			if communityPanel.page == communityPageJournal {
+				journalSave()
+			}
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			closeCommunityPanel()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageWineApps {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			wineAppCatalogMove(-1)
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			wineAppCatalogMove(1)
+		case sdl.CONTROLLER_BUTTON_A:
+			wineAppCatalogOpen()
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageWineComponents {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			wineComponentsMove(-1)
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			wineComponentsMove(1)
+		case sdl.CONTROLLER_BUTTON_A:
+			wineComponentsActivate()
+		case sdl.CONTROLLER_BUTTON_X:
+			wineComponentsVerify()
+		case sdl.CONTROLLER_BUTTON_Y:
+			if err := wineComponentsCreateTemplate(); err != nil {
+				ShowToast("Could not make the example list: "+firstLine(err.Error()), ToastKindError)
+			} else {
+				ShowToast("Example components.json written — fill in its SHA-256", ToastKindSuccess)
+			}
+		case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+			wineComponentsRemove()
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
+	if communityPanel.page == communityPagePluginMarket {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			plugMarketMove(-1)
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			plugMarketMove(1)
+		case sdl.CONTROLLER_BUTTON_A:
+			plugMarketActivate()
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageOfflineRef {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			if offlineRefUI.open {
+				communityPanel.scroll -= 2
+				if communityPanel.scroll < 0 {
+					communityPanel.scroll = 0
+				}
+			} else {
+				offlineRefMove(-1)
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			if offlineRefUI.open {
+				communityPanel.scroll += 2
+			} else {
+				offlineRefMove(1)
+			}
+		case sdl.CONTROLLER_BUTTON_A:
+			if offlineRefUI.open {
+				offlineRefClose()
+			} else {
+				offlineRefOpen()
+				communityPanel.scroll = 0
+			}
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			if offlineRefUI.open {
+				offlineRefClose()
+			} else {
+				communityPanel.page = communityPageHome
+				communityPanel.cursor = 0
+				PlayBackSound()
+			}
+		}
+		return true
 	}
 	if communityPanel.page == communityPageBIOSDoctor || communityPanel.page == communityPageDiagnosticsQR {
 		if communityPanel.page == communityPageDiagnosticsQR {
@@ -426,6 +790,27 @@ func handleCommunityMouse(mx, my int32, config *Config) bool {
 		return false
 	}
 	if communityPanel.page != communityPageHome {
+		if communityPanel.page == communityPagePluginMarket || communityPanel.page == communityPageOfflineRef ||
+			communityPanel.page == communityPageWineComponents || communityPanel.page == communityPageWineApps {
+			// The card is opened from the hub: a tap inside keeps it open,
+			// a tap outside goes back to the hub list.
+			if communityPanelRect.W > 0 && !pointInRect(mx, my, communityPanelRect) {
+				communityPanel.page = communityPageHome
+				communityPanel.cursor = 0
+				PlayBackSound()
+			}
+			return true
+		}
+		if communityPanel.page == communityPageROMAudit || communityPanel.page == communityPageJournal ||
+			communityPanel.page == communityPageSteamAch {
+			// A click on the report is a scroll page, not a way back to the
+			// hub: this page is opened from the Games Library, not from the
+			// hub's list, so B/Back is the way out.
+			if communityPanelRect.W > 0 && !pointInRect(mx, my, communityPanelRect) {
+				closeCommunityPanel()
+			}
+			return true
+		}
 		// The diagnostics code enlarges on a tap; every other click on a
 		// sub-page returns to the list.
 		if communityQRRect.W > 0 && pointInRect(mx, my, communityQRRect) {
@@ -460,7 +845,9 @@ func handleCommunityWheel(y int32) bool {
 	if !communityPanel.open {
 		return false
 	}
-	if communityPanel.page == communityPageChangelog || communityPanel.page == communityPageBIOSDoctor {
+	if communityPanel.page == communityPageChangelog || communityPanel.page == communityPageBIOSDoctor ||
+		communityPanel.page == communityPageROMAudit || communityPanel.page == communityPageJournal ||
+		communityPanel.page == communityPageSteamAch {
 		communityPanel.scroll -= int(y) * 3
 		if communityPanel.scroll < 0 {
 			communityPanel.scroll = 0
@@ -481,7 +868,10 @@ func communityPanelSize(page communityPage, rowH, headerH int32) (int32, int32) 
 		panelW = screenWidth - 40
 	}
 	var panelH int32
-	if page == communityPageChangelog || page == communityPageBIOSDoctor || page == communityPageDiagnosticsQR {
+	if page == communityPageChangelog || page == communityPageBIOSDoctor ||
+		page == communityPageROMAudit || page == communityPageJournal || page == communityPageSteamAch ||
+		page == communityPagePluginMarket || page == communityPageOfflineRef || page == communityPageWineComponents ||
+		page == communityPageWineApps || page == communityPageDiagnosticsQR {
 		panelH = 620
 		if panelH > screenHeight-40 {
 			panelH = screenHeight - 40
@@ -525,6 +915,27 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	} else if communityPanel.page == communityPageBIOSDoctor {
 		title = "BIOS Doctor"
 		sub = "Firmware presence and SHA-256 fingerprints"
+	} else if communityPanel.page == communityPageROMAudit {
+		title = "ROM Audit"
+		sub = "No-Intro and Redump DATs: missing, bad dumps, duplicates, renames"
+	} else if communityPanel.page == communityPageJournal {
+		title = "Play Journal"
+		sub = "Sessions, status and this year in games"
+	} else if communityPanel.page == communityPageSteamAch {
+		title = "Steam Achievements"
+		sub = "Unlocked and still to earn, from your account"
+	} else if communityPanel.page == communityPagePluginMarket {
+		title = "Plugin catalog"
+		sub = "Local plugins only — read before you install"
+	} else if communityPanel.page == communityPageOfflineRef {
+		title = "Offline reference"
+		sub = "Documents on the card; nothing is fetched"
+	} else if communityPanel.page == communityPageWineComponents {
+		title = "WINE components"
+		sub = "Your list, verified downloads, no surprises"
+	} else if communityPanel.page == communityPageWineApps {
+		title = "Wine apps"
+		sub = "Free open-source Windows programs, from their own sites"
 	} else if communityPanel.page == communityPageDiagnosticsQR {
 		title = "Diagnostics export"
 		sub = "A time-limited QR link to the redacted support report"
@@ -547,6 +958,43 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 
 	if communityPanel.page == communityPageChangelog {
 		renderCommunityChangelog(renderer, config, font, panelX, panelY, panelW, panelH, padX, smallH, headerH)
+		return
+	}
+	if communityPanel.page == communityPageJournal {
+		renderCommunityJournal(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH)
+		return
+	}
+	if communityPanel.page == communityPageSteamAch {
+		renderCommunitySteamAch(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH)
+		return
+	}
+	if communityPanel.page == communityPagePluginMarket {
+		renderCommunityPluginMarket(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH)
+		return
+	}
+	if communityPanel.page == communityPageOfflineRef {
+		renderCommunityOfflineRef(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH)
+		return
+	}
+	if communityPanel.page == communityPageWineComponents {
+		renderCommunityWineComponents(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH)
+		return
+	}
+	if communityPanel.page == communityPageWineApps {
+		renderCommunityWineApps(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH)
+		return
+	}
+	if communityPanel.page == communityPageROMAudit {
+		report, scanning, checked, total := romAuditSnapshot()
+		if report == nil && !scanning {
+			romAuditStart()
+			scanning = true
+		}
+		shown := romAuditReport{}
+		if report != nil {
+			shown = *report
+		}
+		renderCommunityROMAudit(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH, shown, scanning, checked, total)
 		return
 	}
 	if communityPanel.page == communityPageBIOSDoctor {
