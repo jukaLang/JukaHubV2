@@ -133,10 +133,8 @@ func setSections() []setSection {
 	return uiModeSettingsSections(setSectionsCache)
 }
 
-// setSectionIndex finds a section by id (-1 when unknown). A retired id
-// ("datetime", "keyboard") finds the section that took its rows.
+// setSectionIndex finds a section by id (-1 when unknown).
 func setSectionIndex(id string) int {
-	id = setSectionAlias(id)
 	for i, s := range setSections() {
 		if s.ID == id {
 			return i

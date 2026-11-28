@@ -179,13 +179,34 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 			}
 		}
 		if groq {
-			samples, rate, err := ttsGroqSpeak(ctx, s.key, s.voice, chunk)
-			if err == nil {
-				if keep {
-					ttsCacheStore(s.cacheID(true), chunk, samples, rate)
+			// The WAV streams into the feeder as it arrives (SND-14), so the
+			// first word no longer waits for the whole response. A cacheable
+			// chunk is collected on the side; the trim and fades wait for a
+			// whole clip (ttsClipFor) and are applied when it is played again.
+			var collected []int16
+			clipRate := 0
+			_, err := ttsGroqStream(ctx, s.key, s.voice, chunk, func(block []int16, blockRate int) bool {
+				if len(block) == 0 {
+					return true
 				}
-				if clip := ttsClipFor(samples, rate, s.rate); clip != nil && !send(ctx, clip) {
+				if clipRate == 0 {
+					clipRate = blockRate
+				}
+				if keep {
+					collected = append(collected, block...)
+				}
+				clip := ttsResample(block, blockRate, s.rate)
+				if len(clip) == 0 {
+					return true
+				}
+				return send(ctx, clip)
+			})
+			if err == nil {
+				if ctx.Err() != nil {
 					return
+				}
+				if keep && len(collected) > 0 && clipRate > 0 {
+					ttsCacheStore(s.cacheID(true), chunk, collected, clipRate)
 				}
 				continue
 			}

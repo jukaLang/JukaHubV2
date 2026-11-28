@@ -1891,9 +1891,6 @@ func loadUserConfig() *UserConfig {
 	if migrateHandheldButtonMapping(userConfigCache, P().IsHandheld()) {
 		saveUserConfig(userConfigCache)
 	}
-	if dropRetiredVaultVars(userConfigCache) {
-		saveUserConfig(userConfigCache)
-	}
 	return userConfigCache
 }
 
@@ -1918,23 +1915,6 @@ func migrateHandheldButtonMapping(user *UserConfig, handheld bool) bool {
 	user.Variables.Custom["swapABButtons"] = true
 	user.Variables.Custom[abSwapMigrationKey] = true
 	return true
-}
-
-// dropRetiredVaultVars removes the cached state of the retired Vault feed from
-// older user configs. The feed no longer reads these keys; dropping them keeps
-// stale results and errors from being carried forward forever.
-func dropRetiredVaultVars(user *UserConfig) bool {
-	if user == nil || user.Variables.Custom == nil {
-		return false
-	}
-	changed := false
-	for key := range user.Variables.Custom {
-		if retiredVaultVar(key) {
-			delete(user.Variables.Custom, key)
-			changed = true
-		}
-	}
-	return changed
 }
 
 // migrateWeatherUnitAuto clears the old implicit Celsius default once so the

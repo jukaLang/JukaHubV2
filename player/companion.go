@@ -50,10 +50,11 @@ const (
 // ── Queued actions ──
 
 const (
-	companionEventText   = "text"
-	companionEventKey    = "key"
-	companionEventURL    = "url"
-	companionEventUpload = "upload"
+	companionEventText    = "text"
+	companionEventKey     = "key"
+	companionEventURL     = "url"
+	companionEventNetplay = "netplay"
+	companionEventUpload  = "upload"
 )
 
 // companionEvent is one action waiting for the main loop.
@@ -773,8 +774,13 @@ func (s *companionServer) handleOpenURL(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	url := strings.TrimSpace(body.URL)
+	if netplayInviteIsLink(url) {
+		s.sink(companionEvent{Kind: companionEventNetplay, Text: url})
+		writeCompanionJSON(w, map[string]interface{}{"ok": true})
+		return
+	}
 	if !looksLikeStreamURL(url) {
-		http.Error(w, "only http(s) and stream links can be sent", http.StatusBadRequest)
+		http.Error(w, "only http(s), stream and netplay invite links can be sent", http.StatusBadRequest)
 		return
 	}
 	s.sink(companionEvent{Kind: companionEventURL, Text: url})

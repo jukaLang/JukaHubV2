@@ -68,9 +68,26 @@ type ctrldiagPanelState struct {
 
 var ctrldiag ctrldiagPanelState
 
+// ctrldiagMapState is the "map it" recording (INP-9): the raw joystick buttons
+// pressed for each controllerMapSteps entry. It polls the joystick directly,
+// because a pad SDL has no mapping for sends no controller events at all.
+type ctrldiagMapState struct {
+	active  bool
+	step    int
+	guid    string
+	name    string
+	buttons map[string]uint8
+	joy     *sdl.Joystick
+	prev    []bool
+	note    string
+}
+
+var ctrldiagMap ctrldiagMapState
+
 // ctrldiagResetRect is the click target for the Reset chip; only touched on the
 // render and event thread.
 var ctrldiagResetRect sdl.Rect
+var ctrldiagMapRect sdl.Rect
 var ctrldiagPanelRect sdl.Rect
 
 // diagAxisNames labels the six axes in the order SDL reports them.
@@ -153,13 +170,109 @@ func openCtrldiag() {
 
 // closeCtrldiag hides the panel.
 func closeCtrldiag() {
+	ctrldiagMapStop()
 	ctrldiag.open = false
 	PlayBackSound()
+}
+
+// ctrldiagMapStart begins recording button presses for a mapping. The GUID and
+// name are the raw joystick's, so SDL can match the line to this pad later.
+func ctrldiagMapStart() bool {
+	ctrldiagMapStop()
+	if sdl.NumJoysticks() <= 0 {
+		ctrldiagMap.note = "No controller is connected"
+		return false
+	}
+	joy := sdl.JoystickOpen(0)
+	if joy == nil {
+		ctrldiagMap.note = "The controller could not be opened"
+		return false
+	}
+	ctrldiagMap = ctrldiagMapState{
+		active:  true,
+		guid:    sdl.JoystickGetGUIDString(sdl.JoystickGetDeviceGUID(0)),
+		name:    sdl.JoystickNameForIndex(0),
+		buttons: map[string]uint8{},
+		joy:     joy,
+		prev:    make([]bool, joy.NumButtons()),
+	}
+	PlayActivateSound()
+	return true
+}
+
+// ctrldiagMapStop ends a recording and closes the raw joystick.
+func ctrldiagMapStop() {
+	if ctrldiagMap.joy != nil {
+		ctrldiagMap.joy.Close()
+	}
+	ctrldiagMap = ctrldiagMapState{}
+}
+
+// ctrldiagMapCancel ends a recording but keeps the note explaining why the
+// panel is not recording.
+func ctrldiagMapCancel(note string) {
+	if ctrldiagMap.joy != nil {
+		ctrldiagMap.joy.Close()
+	}
+	ctrldiagMap = ctrldiagMapState{note: note}
+}
+
+// ctrldiagMapPoll samples the raw buttons and records each fresh press. It runs
+// on the render/event thread, once a frame, only while a recording is open.
+func ctrldiagMapPoll() {
+	m := &ctrldiagMap
+	if !m.active || m.joy == nil {
+		return
+	}
+	n := m.joy.NumButtons()
+	if len(m.prev) < n {
+		m.prev = append(m.prev, make([]bool, n-len(m.prev))...)
+	}
+	for b := 0; b < n && m.active; b++ {
+		down := m.joy.Button(b) != 0
+		if down && !m.prev[b] {
+			ctrldiagMapButton(b)
+		}
+		m.prev[b] = down
+	}
+}
+
+// ctrldiagMapButton records one button for the current step and finishes the
+// mapping after the last one. Pure enough for a test to drive it directly.
+func ctrldiagMapButton(button int) {
+	m := &ctrldiagMap
+	if !m.active || m.step < 0 || m.step >= len(controllerMapSteps) {
+		return
+	}
+	m.buttons[controllerMapSteps[m.step].Token] = uint8(button)
+	m.step++
+	if m.step >= len(controllerMapSteps) {
+		ctrldiagMapFinish()
+	}
+}
+
+// ctrldiagMapFinish builds, stores and installs the recorded mapping.
+func ctrldiagMapFinish() {
+	m := &ctrldiagMap
+	line, ok := controllerMappingLine(m.guid, m.name, controllerPlatform(), m.buttons)
+	if !ok {
+		ctrldiagMapCancel("That recording cannot make a mapping; try again")
+		return
+	}
+	if err := controllerDBAppendUser(line); err != nil {
+		logWarn("gamepad", "could not save the controller mapping: %v", err)
+		ctrldiagMapCancel("The mapping could not be saved")
+		return
+	}
+	controllerAddMapping(line)
+	logInfo("gamepad", "controller mapping saved for %s", controllerMappingName(m.name))
+	ctrldiagMapCancel("Mapping saved; unplug and reconnect the pad")
 }
 
 // ctrldiagReset clears the readings but keeps the panel open, so a user can
 // press one button and watch it register from a clean slate.
 func ctrldiagReset() {
+	ctrldiagMapStop()
 	ctrldiag.axes = [diagAxisCount]diagAxisState{}
 	ctrldiag.buttons = make(map[uint8]*diagButtonState, len(diagButtons))
 	for _, b := range diagButtons {
@@ -331,6 +444,12 @@ func handleCtrldiagKey(e *sdl.KeyboardEvent, config *Config) bool {
 		return false
 	}
 	switch e.Keysym.Sym {
+	case sdl.K_m:
+		if ctrldiagMap.active {
+			ctrldiagMapCancel("Mapping cancelled")
+		} else if ctrldiagMapStart() {
+			ctrldiagMap.note = ""
+		}
 	case sdl.K_r, sdl.K_RETURN, sdl.K_SPACE:
 		ctrldiagReset()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
@@ -343,6 +462,14 @@ func handleCtrldiagKey(e *sdl.KeyboardEvent, config *Config) bool {
 func handleCtrldiagMouse(mx, my int32, config *Config) bool {
 	if !ctrldiag.open {
 		return false
+	}
+	if ctrldiagMapRect.W > 0 && pointInRect(mx, my, ctrldiagMapRect) {
+		if ctrldiagMap.active {
+			ctrldiagMapCancel("Mapping cancelled")
+		} else {
+			ctrldiagMapStart()
+		}
+		return true
 	}
 	if ctrldiagResetRect.W > 0 && pointInRect(mx, my, ctrldiagResetRect) {
 		ctrldiagReset()
@@ -359,6 +486,7 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 	if !ctrldiag.open || renderer == nil {
 		return
 	}
+	ctrldiagMapPoll()
 	// Holding SELECT is the way out on a pad-only device.
 	if ctrldiagBackHeld(ctrldiagClock()) {
 		closeCtrldiag()
@@ -452,6 +580,19 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 		resetLabel = "Reset (Enter)"
 	}
 	footerY := panelY + panelH - footerH + 6
+	mapLabel := "Map it"
+	if ctrldiagMap.active {
+		mapLabel = "Cancel map"
+	}
+	ctrldiagMapRect = sdl.Rect{X: panelX + padX, Y: footerY, W: int32(96), H: chipH}
+	if tw, _ := measureText(font, mapLabel); tw+24 > ctrldiagMapRect.W {
+		ctrldiagMapRect.W = tw + 24
+	}
+	fillRoundedRect(renderer, ctrldiagMapRect.X, ctrldiagMapRect.Y, ctrldiagMapRect.W, ctrldiagMapRect.H, 8,
+		WithAlpha(installHighlight(), 40))
+	strokeRoundedRect(renderer, ctrldiagMapRect.X, ctrldiagMapRect.Y, ctrldiagMapRect.W, ctrldiagMapRect.H, 8, 1, ColorBorderDefault)
+	renderText(renderer, config, font, mapLabel, ColorTextSecondary(),
+		ctrldiagMapRect.X+12, ctrldiagMapRect.Y+6)
 	resetW := int32(96)
 	if tw, _ := measureText(font, resetLabel); tw+24 > resetW {
 		resetW = tw + 24
@@ -463,7 +604,15 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, resetLabel, ColorTextSecondary(),
 		ctrldiagResetRect.X+12, ctrldiagResetRect.Y+6)
 
-	renderText(renderer, config, font, ctrldiagFooterLine(v), ColorTextTertiary(), panelX+padX, footerY+6)
+	footerLine := ctrldiagFooterLine(v)
+	if ctrldiagMap.active && ctrldiagMap.step < len(controllerMapSteps) {
+		footerLine = fmt.Sprintf("Press %s (%d/%d)", controllerMapSteps[ctrldiagMap.step].Label, ctrldiagMap.step+1, len(controllerMapSteps))
+	} else if ctrldiagMap.active {
+		footerLine = "Saving the mapping..."
+	} else if ctrldiagMap.note != "" {
+		footerLine = ctrldiagMap.note
+	}
+	renderText(renderer, config, font, footerLine, ColorTextTertiary(), ctrldiagMapRect.X+ctrldiagMapRect.W+12, footerY+6)
 }
 
 // ctrldiagFooters is the footer line per hint vocabulary (pad, keyboard).

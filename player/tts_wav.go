@@ -19,8 +19,10 @@ package main
 // Everything here is pure.
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
 )
 
@@ -93,6 +95,120 @@ func ttsDecodeWAV(data []byte, toEOF bool) ([]int16, int, error) {
 		off = int(next)
 	}
 	return nil, 0, errTTSNotWAV
+}
+
+// ttsDecodeWAVStream reads a WAV as it arrives and hands each PCM block to
+// sink, so the first word can start before the response ends (SND-14). It is
+// the streaming twin of ttsDecodeWAV: the fmt chunk is still read, and Groq's
+// data size is still ignored (toEOF), but the lead/tail trim and the fades
+// wait for a whole clip and are skipped here. sink returns false to stop.
+func ttsDecodeWAVStream(r io.Reader, toEOF bool, sink func([]int16, int) bool) (int, error) {
+	br := bufio.NewReaderSize(r, 32*1024)
+	head := make([]byte, 12)
+	if _, err := io.ReadFull(br, head); err != nil || string(head[0:4]) != "RIFF" || string(head[8:12]) != "WAVE" {
+		return 0, errTTSNotWAV
+	}
+	var (
+		haveFmt  bool
+		format   int
+		channels int
+		rate     int
+		bits     int
+	)
+	for {
+		ch := make([]byte, 8)
+		if _, err := io.ReadFull(br, ch); err != nil {
+			return 0, errTTSNotWAV
+		}
+		id := string(ch[0:4])
+		size := int(binary.LittleEndian.Uint32(ch[4:8]))
+		if size < 0 {
+			return 0, errTTSWAVShape
+		}
+		switch id {
+		case "fmt ":
+			if size < 16 || size > 64<<10 {
+				return 0, errTTSWAVShape
+			}
+			body := make([]byte, size)
+			if _, err := io.ReadFull(br, body); err != nil {
+				return 0, errTTSWAVShape
+			}
+			if size%2 == 1 {
+				_, _ = br.ReadByte()
+			}
+			format = int(binary.LittleEndian.Uint16(body[0:2]))
+			channels = int(binary.LittleEndian.Uint16(body[2:4]))
+			rate = int(binary.LittleEndian.Uint32(body[4:8]))
+			bits = int(binary.LittleEndian.Uint16(body[14:16]))
+			if format == 0xFFFE && size >= 40 {
+				format = int(binary.LittleEndian.Uint16(body[24:26]))
+			}
+			haveFmt = true
+		case "data":
+			if !haveFmt {
+				return 0, errTTSWAVShape
+			}
+			frame := (bits / 8) * channels
+			if frame <= 0 {
+				return 0, errTTSWAVShape
+			}
+			const block = 32 * 1024
+			buf := make([]byte, block-block%frame)
+			remaining := size
+			if toEOF {
+				remaining = -1
+			}
+			var pending []byte
+			for remaining != 0 {
+				n := len(buf)
+				if remaining > 0 && n > remaining {
+					n = remaining
+					n -= n % frame
+					if n == 0 {
+						return rate, nil
+					}
+				}
+				// Read, not ReadFull: a pipe hands over what has arrived, and
+				// the first block must reach the feeder before the rest does.
+				m, err := br.Read(buf[:n])
+				if m > 0 {
+					chunk := make([]byte, len(pending)+m)
+					copy(chunk, pending)
+					copy(chunk[len(pending):], buf[:m])
+					usable := len(chunk) - len(chunk)%frame
+					if usable > 0 {
+						samples, _, perr := ttsPCMFrom(chunk[:usable], format, channels, rate, bits)
+						if perr != nil {
+							return 0, perr
+						}
+						pending = chunk[usable:]
+						if len(samples) > 0 && sink != nil && !sink(samples, rate) {
+							return rate, nil
+						}
+					} else {
+						pending = chunk
+					}
+					if remaining > 0 {
+						remaining -= m
+					}
+				}
+				if err != nil {
+					break
+				}
+			}
+			return rate, nil
+		default:
+			if size > 0 {
+				if _, err := io.CopyN(io.Discard, br, int64(size)); err != nil {
+					return 0, errTTSNotWAV
+				}
+			}
+			if size%2 == 1 {
+				_, _ = br.ReadByte()
+			}
+		}
+	}
 }
 
 // ttsPCMFrom converts interleaved PCM (8/16/24/32-bit integer or 32/64-bit

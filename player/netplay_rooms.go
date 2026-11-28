@@ -435,6 +435,12 @@ func netplayDiscoverOnce(ctx context.Context, wait time.Duration) ([]netplayRoom
 			_, _ = conn.WriteToUDP(query, addr)
 		}
 	}
+	// Plain RetroArch hosts answer their own query on 55435 (GAME-10).
+	for _, target := range partyDiscoveryTargets(netplayRetroArchDiscoveryPort) {
+		if addr, err := net.ResolveUDPAddr("udp4", target); err == nil {
+			_, _ = conn.WriteToUDP([]byte(netplayRetroArchQuery), addr)
+		}
+	}
 	deadline := time.Now().Add(wait)
 	found := map[string]netplayRoom{}
 	buf := make([]byte, netplayDiscoveryMaxReply+64)
@@ -450,6 +456,10 @@ func netplayDiscoverOnce(ctx context.Context, wait time.Duration) ([]netplayRoom
 			continue
 		}
 		if room, ok := parseNetplayBeacon(buf[:n], from); ok {
+			found[room.key()] = room
+			continue
+		}
+		if room, ok := parseRetroArchAnnouncement(buf[:n], from); ok {
 			found[room.key()] = room
 		}
 	}
@@ -927,9 +937,9 @@ func netplayRoomCore(room netplayRoom, installed map[string]string) (string, err
 
 // netplayPlanForRoom builds a join for a discovered room. retroArch is the
 // resolved binary ("" = not installed), looked up once per row rebuild.
-func netplayPlanForRoom(room netplayRoom, index map[string][]libraryGame, installed map[string]string, retroArch string) (netplayPlan, error) {
-	if room.Locked {
-		return netplayPlan{}, errors.New("this room has a password — join it from RetroArch's own Netplay menu")
+func netplayPlanForRoom(room netplayRoom, index map[string][]libraryGame, installed map[string]string, retroArch, password string) (netplayPlan, error) {
+	if room.Locked && strings.TrimSpace(password) == "" {
+		return netplayPlan{}, errNetplayLocked
 	}
 	if !netplaySafeHost(room.Host) || room.Port <= 0 || room.Port > 65535 {
 		return netplayPlan{}, errors.New("this room's address is not usable")
@@ -958,6 +968,6 @@ func netplayPlanForRoom(room netplayRoom, index map[string][]libraryGame, instal
 		return netplayPlan{}, err
 	}
 	plan.Core = core
-	plan.Session = netplaySession{Role: netplayJoin, Game: game, Host: room.Host, Port: room.Port, Relay: room.Relay}
+	plan.Session = netplaySession{Role: netplayJoin, Game: game, Host: room.Host, Port: room.Port, Relay: room.Relay, Password: password}
 	return plan, nil
 }

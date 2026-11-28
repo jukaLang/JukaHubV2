@@ -159,6 +159,62 @@ jobs:
           path: player/internal/*/testdata/fuzz/
           if-no-files-found: ignore
 
+  fuzz-player:
+    name: Fuzz the player's parsers
+    # TEST-8: playlist, disc-sheet, PDF/EPUB, tar, package-manifest, input and
+    # XML input arrive from files, the network and /proc. Package main needs
+    # SDL to build, so this is a separate job from the pure-Go fuzzers above.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: go test -fuzz
+        # One target per run: -fuzz accepts a single name. A failure leaves the
+        # crashing input under testdata/fuzz/, uploaded below as a seed.
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: |
+          status=0
+          for name in \
+            FuzzM3UStreams \
+            FuzzM3UChannels \
+            FuzzCueGdiSheets \
+            FuzzPDFText \
+            FuzzEPUBText \
+            FuzzTarMembers \
+            FuzzXpackManifest \
+            FuzzInputDevices \
+            FuzzXMLConfig; do
+            echo "::group::$name"
+            if ! go test . -run '^$' -fuzz "^${name}\$" -fuzztime 30s; then
+              echo "::error title=Fuzzing found a failure::$name in package main"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+      - name: Keep the crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: player-fuzz-crashers
+          path: player/testdata/fuzz/
+          if-no-files-found: ignore
+
   player-boot:
     name: Player cold-boot budget
     # The same script as `make bench`: builds once, starts the player headless

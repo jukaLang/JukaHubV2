@@ -672,12 +672,11 @@ func finalizeConfig(config *Config) {
 	if config == nil {
 		return
 	}
-	removeRetiredVaultElements(config)
 	normalizeMotionConfig(config)
 	if config.SchemaVersion == 0 {
 		config.SchemaVersion = ConfigSchemaVersion
 	}
-	if config.AppName == "" || config.AppName == "JukaHub 0.4.0" {
+	if config.AppName == "" {
 		config.AppName = "JukaHub"
 	}
 	if config.Version == "" {
@@ -723,10 +722,6 @@ func finalizeConfig(config *Config) {
 			}
 		}
 	}
-	// A 0.4.0 home layout nobody edited gets the redesigned grid; the file is
-	// a user file that updates keep, so this is the only way the new Home
-	// reaches a device that already had one (home_migrate.go).
-	migrateLegacyHomeLayout(config)
 	// Give the Hardware screen its interactive process list entry point.
 	ensureHardwareProcessEntry(config)
 	// And the Wi-Fi picker, beside it on the Hardware action row.

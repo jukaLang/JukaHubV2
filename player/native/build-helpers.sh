@@ -493,18 +493,28 @@ libevent_cmake_dir() {
 
 # build_miniupnpc installs the commit-pinned source into DEPS_PREFIX as a
 # static library, the same way the other dependencies are installed. chiaki-ng
-# then finds it through pkg-config and its FetchContent never runs (TEST-17).
-# Called only after fetch_sources has checked the checkout out.
+# then finds it through pkg-config (pkg_search_module(MINIUPNPC REQUIRED
+# miniupnpc) in its lib/CMakeLists.txt) and its FetchContent never runs
+# (TEST-17). Called only after fetch_sources has checked the checkout out.
 build_miniupnpc() {
     if [ -f "$DEPS_PREFIX/lib/pkgconfig/miniupnpc.pc" ]; then
         return 0
     fi
-    if [ ! -f "$MINIUPNPC_SOURCE/CMakeLists.txt" ]; then
-        die "miniupnpc source is missing at $MINIUPNPC_SOURCE"
+    # MINIUPNPC_SOURCE is the miniupnp repository, which holds several projects
+    # side by side (miniupnpc, miniupnpc-async, miniupnpc-libevent, miniupnpd,
+    # ...): miniupnpc's own CMake project is in its miniupnpc/ directory and the
+    # repository has no CMakeLists.txt at its top. A release tarball of
+    # miniupnpc on its own does have one there, so both layouts are accepted.
+    mu_source="$MINIUPNPC_SOURCE"
+    if [ ! -f "$mu_source/CMakeLists.txt" ]; then
+        mu_source="$MINIUPNPC_SOURCE/miniupnpc"
+    fi
+    if [ ! -f "$mu_source/CMakeLists.txt" ]; then
+        die "miniupnpc source is missing at $MINIUPNPC_SOURCE (no CMakeLists.txt there or in its miniupnpc/ directory)"
     fi
     say "miniupnpc $MINIUPNPC_TAG (static)"
     rm -rf "$DEPS_SRC/miniupnpc-build"
-    quietly miniupnpc-configure cmake -S "$MINIUPNPC_SOURCE" -B "$DEPS_SRC/miniupnpc-build" -G Ninja \
+    quietly miniupnpc-configure cmake -S "$mu_source" -B "$DEPS_SRC/miniupnpc-build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX" \
         -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DUPNPC_BUILD_STATIC=ON -DUPNPC_BUILD_SHARED=OFF \

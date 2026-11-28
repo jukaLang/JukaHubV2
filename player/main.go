@@ -135,6 +135,9 @@ func main() {
 		sdl.SetHint("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2")
 		sdl.SetHint("SDL_WINDOWS_DPI_SCALING", "0")
 	}
+	// INP-9: these are read when the joystick subsystem starts, so they go
+	// before Init, not in the gamepad boot step below.
+	controllerSetHIDAPIHints()
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
 		logFatal("startup", "SDL init error: %v", err)
 	}
@@ -755,8 +758,14 @@ func main() {
 	})
 
 	bootEnqueue("gamepad", func() {
+		// The pinned community database first, then the handheld's own mapping
+		// (the specific one wins), then anything recorded in the Controller
+		// test panel (the user wins). INP-9.
+		controllerDBLoadPinned()
 		// Add Xbox 360 controller mapping for Trimui Smart Pro / Linux
 		sdl.GameControllerAddMapping("030000005e0400008e02000014010000,X360 Controller,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b8,leftshoulder:b4,leftstick:b9,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b10,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Linux,")
+
+		controllerDBLoadUser()
 
 		// A DualShock 4 / DualSense SDL has no mapping for (gamepad_sony.go).
 		for i := 0; i < sdl.NumJoysticks(); i++ {

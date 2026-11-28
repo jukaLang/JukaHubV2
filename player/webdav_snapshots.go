@@ -347,7 +347,8 @@ func webdavSnapshotPreview(ctx context.Context, path, passphrase string, roots [
 
 // webdavSnapshotRestore downloads one version and applies it through the
 // preview above; the merge takes a Save Manager snapshot of every file it
-// replaces before the first one.
+// replaces before the first one. Tests call this seam to exercise the full
+// restore against a local WebDAV server.
 func webdavSnapshotRestore(ctx context.Context, c *webdavConn, snap webdavSnapshot, passphrase string, roots []saveRoot, dir string, progress func(done, total int, current string)) (ssyncResult, error) {
 	path, err := webdavSnapshotFetch(ctx, c, snap.Name, dir)
 	if err != nil {

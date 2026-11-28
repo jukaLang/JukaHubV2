@@ -337,9 +337,9 @@ func dateTimeOpenSettings(config *Config, pickZone bool) {
 	if config == nil {
 		return
 	}
-	// Date & time's rows live in General now (setessentials.go); the old id
-	// still finds them, and the focus lands on Time zone.
-	section := setSectionIndex("datetime")
+	// Date & time's rows live in General (setessentials.go), and the focus
+	// lands on Time zone.
+	section := setSectionIndex("general")
 	if section < 0 {
 		return
 	}

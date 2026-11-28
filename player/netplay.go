@@ -54,6 +54,10 @@ type netplaySession struct {
 	// Online hosts publicly through RelayServer (a netplayRelays ID).
 	Online      bool
 	RelayServer string
+
+	// Password is a locked room's password for this launch only; it reaches
+	// RetroArch through --appendconfig and is never written to the config.
+	Password string
 }
 
 // address is the "ip:port" string the other player types in.
@@ -606,6 +610,17 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	// A disk sync, the player slot, gpSP's wireless adapter and the player
 	// count, for this launch only (netplay_link.go).
 	netplayLinkBeforeLaunch(&plan)
+	if password := strings.TrimSpace(plan.Session.Password); password != "" {
+		cfg, err := netplayWritePasswordConfig(password)
+		if err != nil {
+			return fmt.Errorf("could not prepare the room password: %w", err)
+		}
+		if plan.AppendConfig != "" {
+			plan.AppendConfig += "|" + cfg
+		} else {
+			plan.AppendConfig = cfg
+		}
+	}
 	name, args := netplayCommand(plan)
 	cmd := hiddenCommand(name, args...)
 	cmd.Dir = filepath.Dir(plan.RetroArch)

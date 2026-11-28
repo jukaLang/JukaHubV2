@@ -949,6 +949,11 @@ func ttsCheckVoiceConfig(data []byte) error {
 // only regular files under espeak-ng-data and four exact ARM64 binaries, with
 // the soname filenames that the dynamic loader expects on an exFAT SD card.
 func ttsExtractPiper(ctx context.Context, archive, dest string) error {
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
@@ -1008,18 +1013,17 @@ func ttsExtractPiper(ctx context.Context, archive, dest string) error {
 			return errors.New("Piper package expands beyond its size limit")
 		}
 		total += hdr.Size
-		target := filepath.Join(dest, filepath.FromSlash(rel))
-		if !strings.HasPrefix(target, filepath.Clean(dest)+string(filepath.Separator)) {
-			return errors.New("Piper package escapes its folder")
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		// os.Root confines every write to dest even if an earlier archive
+		// planted a symlink in one of these subfolders.
+		relPath := filepath.FromSlash(rel)
+		if err := root.MkdirAll(filepath.Dir(relPath), 0o755); err != nil {
 			return err
 		}
 		mode := os.FileMode(0o644)
 		if rel == "piper" {
 			mode = 0o755
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		out, err := root.OpenFile(relPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
 			return err
 		}
@@ -1033,7 +1037,7 @@ func ttsExtractPiper(ctx context.Context, archive, dest string) error {
 	// package whose tables were links would fail here, not on the first answer.
 	for _, name := range []string{"piper", "libespeak-ng.so.1", "libpiper_phonemize.so.1", "libonnxruntime.so.1.14.1",
 		"espeak-ng-data/en_dict", "espeak-ng-data/phontab", "espeak-ng-data/phondata", "espeak-ng-data/phonindex", "espeak-ng-data/intonations"} {
-		info, err := os.Stat(filepath.Join(dest, name))
+		info, err := root.Stat(filepath.FromSlash(name))
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 			return fmt.Errorf("Piper package is missing %s", name)
 		}

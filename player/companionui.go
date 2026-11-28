@@ -726,6 +726,15 @@ func drainCompanionQueue(config *Config) {
 		case companionEventURL:
 			playVideoURL(config, ev.Text)
 			showToast("Phone sent a link", ColorToastSuccess)
+		case companionEventNetplay:
+			// A friend's invite forwarded by the phone (GAME-10). The panel
+			// must already be open: it owns the game the invite joins.
+			if !netplayPanel.open {
+				showToast("Open Netplay on a game first, then send the invite again", ColorToastWarn)
+				break
+			}
+			netplayStartJoin(ev.Text, config)
+			showToast("Phone sent a netplay invite", ColorToastSuccess)
 		case companionEventUpload:
 			showToast("Phone sent "+filepath.Base(ev.Text), ColorToastSuccess)
 		case companionEventPlay:

@@ -15,7 +15,7 @@ package main
 // later simply lands under More; a section with no entry here (Plugins, or a
 // new one) shows every row. Two small sections folded into neighbours to
 // shorten the rail: Date & time is now part of General and Keyboard part of
-// Controls (setSectionAliases keeps their old ids working).
+// Controls (setFoldedSections names the two folds).
 
 import (
 	"strconv"
@@ -217,20 +217,13 @@ func setShowAllRow() setRow {
 
 // ── Folding small sections into neighbours ───────────────────────────────
 
-// setSectionAliases are retired section ids and the section that now holds
-// their rows. setSectionIndex resolves them, so old deep links, search
-// entries and saved state still land on the right page.
-var setSectionAliases = map[string]string{
+// setFoldedSections are the small sections whose rows move into a neighbour
+// before the rail is built: Date & time into General, Keyboard into Controls.
+// The source id is not a page afterwards, so nothing resolves it; a caller
+// that wants those rows names the section that holds them.
+var setFoldedSections = map[string]string{
 	"datetime": "general",
 	"keyboard": "controls",
-}
-
-// setSectionAlias is the live section id for id.
-func setSectionAlias(id string) string {
-	if to, ok := setSectionAliases[id]; ok {
-		return to
-	}
-	return id
 }
 
 // setArrangeSections is the catalogue as the rail shows it: Date & time's rows
@@ -247,7 +240,7 @@ func setArrangeSections(sections []setSection) []setSection {
 		return -1
 	}
 	drop := map[string]bool{}
-	for from, to := range setSectionAliases {
+	for from, to := range setFoldedSections {
 		fi, ti := find(from), find(to)
 		if fi < 0 || ti < 0 || sections[fi].Dynamic != nil || sections[ti].Dynamic != nil {
 			continue

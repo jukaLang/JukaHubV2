@@ -349,6 +349,8 @@ func vkActionLabel() string {
 		return fileEditorVKAction()
 	case raachPassVKTarget, screenScraperPassVKTarget:
 		return "Sign in"
+	case netplayPassVKTarget:
+		return "Join"
 	case vkTargetVideoDomain:
 		return "Add"
 	case vkTargetVideoSearch:
@@ -951,6 +953,8 @@ func vkCurrentText() string {
 		return tailscaleKeyBuffer
 	case raachPassVKTarget:
 		return raachPassBuffer
+	case netplayPassVKTarget:
+		return netplayPassBuffer
 	case screenScraperPassVKTarget:
 		return screenScraperPassBuffer
 	case homebrewSearchVKTarget:
@@ -1110,6 +1114,9 @@ func vkSetText(text string, config *Config) {
 		// RetroArch's RetroAchievements password: written on submit only
 		// (raach_signin.go).
 		raachPassBuffer = text
+	case netplayPassVKTarget:
+		// A locked room's password: this launch only (netplay_invite.go).
+		netplayPassBuffer = text
 	case screenScraperPassVKTarget:
 		// The ScreenScraper password: checked and stored on submit only
 		// (artwork_screenscraper_ui.go).
@@ -2158,6 +2165,10 @@ func vkCloseKeyboard() {
 		// Nor RetroArch's RetroAchievements password (raach_signin.go).
 		raachPassBuffer = ""
 	}
+	if vkTarget == netplayPassVKTarget {
+		// Nor a netplay room's password (netplay_invite.go).
+		netplayPassBuffer = ""
+	}
 	if vkTarget == screenScraperPassVKTarget {
 		// Nor the ScreenScraper password (artwork_screenscraper_ui.go).
 		screenScraperPassBuffer = ""
@@ -2760,6 +2771,11 @@ func vkSubmit(config *Config, askAI bool) {
 		pass := raachPassBuffer
 		vkCloseKeyboard()
 		raachPassSubmit(pass)
+	case netplayPassVKTarget:
+		// Taken before closing, which clears it (netplay_invite.go).
+		pass := netplayPassBuffer
+		vkCloseKeyboard()
+		netplayRoomPasswordSubmit(pass)
 	case screenScraperPassVKTarget:
 		// Taken before closing, which clears it (artwork_screenscraper_ui.go).
 		pass := screenScraperPassBuffer

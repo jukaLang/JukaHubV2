@@ -366,6 +366,13 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	if err := os.MkdirAll(poolRoot, 0o755); err != nil {
 		return coreBuild{}, err
 	}
+	// Everything this function writes goes through the destination's root;
+	// the index names the final file, so no archive entry can escape the pool.
+	root, err := os.OpenRoot(poolRoot)
+	if err != nil {
+		return coreBuild{}, err
+	}
+	defer root.Close()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upd.URL, nil)
 	if err != nil {
 		return coreBuild{}, err
@@ -421,13 +428,24 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	if selected.UncompressedSize64 > coreUpdateMaxBinary {
 		return coreBuild{}, coreRefuse(upd, coreTooLargeReason(coreUpdateMaxBinary))
 	}
-	binary, err := os.CreateTemp(poolRoot, ".core-*.so.part")
-	if err != nil {
-		return coreBuild{}, err
+	// os.Root has no CreateTemp: use an exclusive hidden name in the pool and
+	// retry if another updater picked the same nanosecond.
+	var binary *os.File
+	var partRel string
+	for tries := 0; tries < 8; tries++ {
+		partRel = fmt.Sprintf(".core-%d.so.part", time.Now().UnixNano())
+		binary, err = root.OpenFile(partRel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if !errors.Is(err, os.ErrExist) {
+			break
+		}
 	}
+	if err != nil || binary == nil {
+		return coreBuild{}, fmt.Errorf("cannot stage the core: %w", err)
+	}
+	partPath := filepath.Join(poolRoot, partRel)
 	defer func() {
 		binary.Close()
-		_ = os.Remove(binary.Name())
+		_ = root.Remove(partRel)
 	}()
 	rc, err := selected.Open()
 	if err != nil {
@@ -462,9 +480,9 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	// got the runtime — the buildbot's Dolphin (GLIBCXX_3.4.32) was refused on
 	// a Brick Pro whose RetroArch would have run it on JukaHub's glibc.
 	target := coreUpdateCheckTarget(upd, want)
-	problem := coreLoadProblemFile(binary.Name(), target)
+	problem := coreLoadProblemFile(partPath, target)
 	if problem != "" && raGlibcEnsureForCore(ctx, problem, target) {
-		problem = coreLoadProblemFile(binary.Name(), target)
+		problem = coreLoadProblemFile(partPath, target)
 	}
 	// What is left may be the device-access libraries a desktop build links
 	// (libusb, libudev: the buildbot's Dolphin on a Brick Pro, 2026-11-22):
@@ -472,19 +490,19 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	// look that every library it links is somewhere RetroArch finds it.
 	devPending := false
 	if problem != "" {
-		if ok, pending := coreDevLibsEnsureForCore(ctx, problem, binary.Name(), target); ok {
-			problem = coreLoadProblemFile(binary.Name(), target)
+		if ok, pending := coreDevLibsEnsureForCore(ctx, problem, partPath, target); ok {
+			problem = coreLoadProblemFile(partPath, target)
 		} else {
 			devPending = pending
 		}
 	}
-	if problem == "" && coreDevLibsForCore(binary.Name()) != nil {
+	if problem == "" && coreDevLibsForCore(partPath) != nil {
 		// A build that loads with the stand-ins already there (an earlier
 		// nightly's) may import a function they lack: widened now.
-		if _, err := coreDevLibsEnsure(binary.Name(), target); err != nil {
+		if _, err := coreDevLibsEnsure(partPath, target); err != nil {
 			logWarn("emulators", "stand-in device libraries for %s: %v", upd.Core, err)
 		}
-		problem = coreDevLibsStrictProblem(binary.Name(), target)
+		problem = coreDevLibsStrictProblem(partPath, target)
 	}
 	if problem != "" {
 		if err := ctx.Err(); err != nil {
@@ -525,17 +543,17 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	}
 
 	dir := filepath.Join(poolRoot, upd.Core, upd.Date)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	relative := filepath.Join(upd.Core, upd.Date, want)
+	if err := root.MkdirAll(filepath.Join(upd.Core, upd.Date), 0o755); err != nil {
 		return coreBuild{}, err
 	}
-	path := filepath.Join(dir, want)
 	if err := binary.Chmod(0o755); err != nil {
 		return coreBuild{}, err
 	}
 	if err := binary.Close(); err != nil {
 		return coreBuild{}, err
 	}
-	if err := os.Rename(binary.Name(), path); err != nil {
+	if err := root.Rename(partRel, relative); err != nil {
 		return coreBuild{}, err
 	}
 	// Provenance travels with the build: the pool is a folder a user can copy
@@ -550,8 +568,13 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		"fetched_at": time.Now().UTC().Format(time.RFC3339),
 	}
 	if encoded, err := json.MarshalIndent(meta, "", "  "); err == nil {
-		_ = os.WriteFile(filepath.Join(dir, "source.json"), append(encoded, '\n'), 0o644)
+		if metaFile, err := root.OpenFile(filepath.Join(upd.Core, upd.Date, "source.json"),
+			os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644); err == nil {
+			_, _ = metaFile.Write(append(encoded, '\n'))
+			_ = metaFile.Close()
+		}
 	}
+	path := filepath.Join(dir, want)
 	// The pool is a build cache, not an archive: with the handheld updating its
 	// cores by itself a new dated folder per core per day would be the fastest
 	// growing thing on the card. The build just written is never a candidate.

@@ -11,7 +11,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // ConfigSchemaVersion is the config format this build writes. Bump it when a
@@ -41,41 +40,4 @@ func MigrateConfig(cfg *Config) (int, error) {
 		}
 	}
 	return from, nil
-}
-
-// removeRetiredVaultElements drops the Vault button from layouts saved by an
-// older build. The feed behind it no longer exists, so leaving the button in a
-// user config would only present a dead control. Only the retired trigger is
-// matched; unrelated buttons and themes are untouched.
-func removeRetiredVaultElements(cfg *Config) {
-	if cfg == nil {
-		return
-	}
-	for i := range cfg.Scenes {
-		elements := cfg.Scenes[i].Elements
-		kept := elements[:0]
-		for _, elem := range elements {
-			if strings.EqualFold(strings.TrimSpace(elem.Trigger), "vault_search") {
-				continue
-			}
-			kept = append(kept, elem)
-		}
-		cfg.Scenes[i].Elements = kept
-	}
-	for key := range cfg.Variables.Custom {
-		if retiredVaultVar(key) {
-			delete(cfg.Variables.Custom, key)
-		}
-	}
-}
-
-// retiredVaultVar reports a custom variable that only the retired Vault feed
-// used. Matching is case-insensitive because older configs may have been
-// hand-edited.
-func retiredVaultVar(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "vault_search_query", "vault_top", "vault_error":
-		return true
-	}
-	return false
 }

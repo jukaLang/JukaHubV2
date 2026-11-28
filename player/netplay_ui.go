@@ -36,6 +36,7 @@ const (
 	netplayRowRoom
 	netplayRowOnlineInfo
 	netplayRowAddress
+	netplayRowShare
 )
 
 // netplayRow is one line of the panel. Room rows carry their join plan (or
@@ -48,6 +49,7 @@ type netplayRow struct {
 	detail string
 	room   netplayRoom
 	plan   netplayPlan
+	locked bool
 	err    string
 }
 
@@ -247,6 +249,7 @@ func netplayRebuildRows(force bool) {
 	rows[1].detail = "Friends anywhere join through the " + relay.Label + " relay — no router setup"
 	// Link cable (Game Boy) or wireless adapter (GBA) rows (netplay_link_ui.go).
 	rows = append(rows, netplayLinkRows()...)
+	rows = append(rows, netplayShareRow(game))
 
 	index := netplayLibraryIndex()
 	// One RetroArch lookup and one core-folder listing per rebuild, shared by
@@ -331,6 +334,83 @@ func netplayRebuildRows(force bool) {
 	}
 }
 
+// netplayShareRow offers the hosted game's link before RetroArch takes the
+// screen: the friend joins it after the host starts.
+func netplayShareRow(game libraryGame) netplayRow {
+	row := netplayRow{kind: netplayRowShare, key: "share", label: "Share an invite"}
+	plan, err := netplayPlanFor(netplayHost, game, "")
+	if err != nil {
+		row.err = err.Error()
+		row.detail = err.Error()
+		return row
+	}
+	row.plan = plan
+	row.detail = "A link or QR a friend's JukaHub can join from"
+	return row
+}
+
+// netplayOpenInviteSheet shows the link and QR for the highlighted game.
+func netplayOpenInviteSheet(config *Config, row netplayRow) {
+	if row.err != "" {
+		netplaySetStatus(row.err, true)
+		return
+	}
+	link := netplayInviteLink(row.plan)
+	tbxOpenSheet(config, tbxSheetSpec{
+		title:    "Share this game",
+		subtitle: row.plan.Session.Game.Label(),
+		icon:     "chat",
+		body: "Start the host first, then let your friend open this link from their JukaHub's phone companion " +
+			"(or scan the code). The room is on your network; the link carries no password.",
+		qr:      tbxQRModules(link),
+		qrLabel: link,
+		buttons: []tbxSheetButton{{label: "Done", primary: true}},
+	})
+}
+
+// netplayAskRoomPassword opens the masked keyboard for a locked room.
+func netplayAskRoomPassword(row netplayRow) {
+	netplayPasswordRow = row
+	netplayPassBuffer = ""
+	who := row.room.Nick
+	if who == "" {
+		who = "the host"
+	}
+	netplaySetStatus("Password for "+who+"'s room", false)
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = netplayPassVKTarget
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// netplayRoomPasswordSubmit joins the waiting locked room with the typed
+// password, which lives only in this launch's appendconfig.
+func netplayRoomPasswordSubmit(pass string) {
+	row := netplayPasswordRow
+	netplayPasswordRow = netplayRow{}
+	if row.room.Host == "" || pass == "" {
+		return
+	}
+	plan := row.plan
+	plan.Session.Password = pass
+	if err := netplayLaunch(plan, appConfig); err != nil {
+		netplaySetStatus(err.Error(), true)
+		return
+	}
+	closeNetplayPanel()
+	who := row.room.Nick
+	if who == "" {
+		who = "the host"
+	}
+	ShowToast("Joining "+who+" in "+plan.Session.Game.Label(), ToastKindInfo)
+}
+
 func netplayHostLANDetail() string {
 	if address := netplayLocalAddress(); address != "" {
 		return "Others on your Wi-Fi see it here, or join at " + address
@@ -340,13 +420,19 @@ func netplayHostLANDetail() string {
 
 // netplayRoomRow resolves one room into a row.
 func netplayRoomRow(room netplayRoom, index map[string][]libraryGame, installed map[string]string, retroArch string) netplayRow {
-	row := netplayRow{kind: netplayRowRoom, key: "room:" + room.key(), room: room}
+	row := netplayRow{kind: netplayRowRoom, key: "room:" + room.key(), room: room, locked: room.Locked}
 	who := room.Nick
 	if who == "" {
 		who = "Someone"
 	}
 	row.label = who + " · " + room.Title
-	plan, err := netplayPlanForRoom(room, index, installed, retroArch)
+	password := ""
+	if room.Locked {
+		// Resolve the game and core now; the password replaces this
+		// placeholder when the player types it.
+		password = "\x00"
+	}
+	plan, err := netplayPlanForRoom(room, index, installed, retroArch, password)
 	where := "On your network"
 	if room.Source == netplayRoomOnline {
 		where = "Online"
@@ -363,6 +449,11 @@ func netplayRoomRow(room netplayRoom, index map[string][]libraryGame, installed 
 		return row
 	}
 	row.plan = plan
+	row.plan.Session.Password = ""
+	if room.Locked {
+		row.detail = where + " · " + netplayCoreLabel(plan.Core) + " · password protected"
+		return row
+	}
 	row.detail = where + " · " + netplayCoreLabel(plan.Core) + " · ready"
 	return row
 }
@@ -517,6 +608,8 @@ func netplayActivate(config *Config) {
 			return
 		}
 		netplayStartJoin(netplayPanel.address, config)
+	case netplayRowShare:
+		netplayOpenInviteSheet(config, row)
 	default:
 		netplayLinkActivate(row, config) // link rows (netplay_link_ui.go)
 	}
@@ -569,6 +662,10 @@ func netplayStartRoom(row netplayRow, config *Config) {
 		netplaySetStatus(row.err, true)
 		return
 	}
+	if row.locked {
+		netplayAskRoomPassword(row)
+		return
+	}
 	plan := row.plan
 	if err := netplayLaunch(plan, config); err != nil {
 		netplaySetStatus(err.Error(), true)
@@ -583,6 +680,20 @@ func netplayStartRoom(row netplayRow, config *Config) {
 }
 
 func netplayStartJoin(raw string, config *Config) {
+	if netplayInviteIsLink(raw) {
+		plan, err := netplayJoinInvite(raw)
+		if err != nil {
+			netplaySetStatus(err.Error(), true)
+			return
+		}
+		if err := netplayLaunch(plan, config); err != nil {
+			netplaySetStatus(err.Error(), true)
+			return
+		}
+		closeNetplayPanel()
+		ShowToast("Joining "+plan.Session.Game.Label(), ToastKindInfo)
+		return
+	}
 	plan, err := netplayPlanFor(netplayJoin, netplayPanel.game, raw)
 	if err != nil {
 		netplaySetStatus(err.Error(), true)

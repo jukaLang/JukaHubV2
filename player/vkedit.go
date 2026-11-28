@@ -443,7 +443,7 @@ func vkApplyAutoShift() {
 func vkSecretTarget() bool {
 	switch vkTarget {
 	case vkTargetWiFi, vkTargetGroqKey, bootLockVKTarget, feArchivePassVKTarget, homebrewKeyVKTarget, nasPassVKTarget,
-		raachPassVKTarget, tailscaleKeyVKTarget, screenScraperPassVKTarget:
+		raachPassVKTarget, netplayPassVKTarget, tailscaleKeyVKTarget, screenScraperPassVKTarget:
 		return true
 	case vkTargetRommServer:
 		return rommCloud.editToken

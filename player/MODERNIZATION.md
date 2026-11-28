@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **7**.
+Open tasks: **62**.
 
 Open work an agent can finish and check without a person at the device —
 builds, tests, static checks, scripted probes, screenshots it can read — plus
@@ -44,6 +44,31 @@ shares; features unchanged.
 **Verify.** Size per package (`go tool nm -size -sort size`, the top ten) and
 cold-cache build time before and after, in a new `docs/PERFORMANCE.md`.
 
+### PERF-12 — Per-frame allocation sweep (P2, M) [WIN]
+**Where.** `downloadsui.go`, list renderers, `textcache.go`.
+**Done when.** `go test -bench` style allocation probes (temporary, not committed
+as tests) show 0 allocs/frame on Home, Library and Downloads at rest.
+**Verify.** pprof alloc profile of a 60 s idle session on Windows attached.
+
+### GPU-2 — Fewer render-target switches (P2, M)
+**Where.** `shapeCache.go`, `dynamicbg.go` (`bgGrads`), `iconatlas.go`,
+`warmSceneCaches` in `bootwork.go`.
+**Done when.** Bakes are batched (one target switch per cache per frame, or
+software surfaces uploaded once), and a scene change on the device has no frame
+> 50 ms caused by baking.
+**Verify.** framestats histogram during scene changes before/after.
+
+### GPU-3 — Geometry instead of textures for flat shapes (P3, M)
+**Where.** `shapeCache.go`, `ui_glass.go`, `backgroundfx.go`; `glass_real.go`
+and `liquidbg.go` show the allocation-free `RenderGeometry` pattern.
+**Done when.** Backdrop glows and glass fills draw through geometry where a
+measurement says it is cheaper; the texture path stays for the software
+renderer.
+
+---
+
+## Architecture (ARCH)
+
 ### ARCH-1 — Package split, step 1: pure leaves (P1, M) [WIN]
 **Where.** `vecraster.go`, `icondefs.go`, `retry.go`, `browserpsl.go`,
 `ramsearch*.go`, `ppsspp_calibration.go`, `port_compat.go`, `lyrics.go`,
@@ -66,6 +91,353 @@ emulator catalogs (`emusystems.go`, compat tables), media library scanner
 draw, present, pace) in their own files; `core.go` is split by responsibility
 (render helpers, triggers, video entry points) without behaviour change.
 
+---
+
+## Build, tests and CI (BUILD, TEST)
+
+CI runs two jobs on a push (`ci.yml`) and the slow checks weekly
+(`weekly.yml`); new checks go to `weekly.yml` or to `make` targets, never to a
+new per-push job.
+
+### BUILD-6 — The Box64 pack reaches a release (P1, S) [NET]
+**Where.** `.github/workflows/wine-runtime.yml`, `docker-image.yml`
+(`build-wine-runtime`, `attach-wine-runtime`), `player/native/build-runtimes.sh`
+(`wine`, `ALLOWED_NEEDED`), `.github/scripts/build-root.sh`.
+**Done when.** A push's release carries `JukaHub-Wine-linux-arm64.zip` whose
+BUILDINFO shows only `ALLOWED_NEEDED` libraries, nothing newer than GLIBC 2.31
+and `box64 --version` 0.4.4; the advisory step prints `wine-10.0` or names the
+next fix; a push with unchanged inputs says "Reused … from run N".
+
+### TEST-1 — A scene-dump tool, not a test (P1, M) [WIN]
+**Where.** New `player/tools/scenedump/` (a `go run` program reusing the player
+package through an exported entry point or a build tag).
+**Done when.** `go run ./tools/scenedump -out tmp/scenes` writes every config
+scene and the main Go pages at 1280×720 and 960×720 (SDL dummy driver, software
+renderer) in under a minute.
+**Verify.** The PNGs exist and look right; `docs/DEVELOPMENT.md` documents it.
+
+### TEST-16 — A supported OpenSSL in the Remote Play helpers (P2, S) [NET]
+**Where.** `player/native/build-helpers.sh` (native mode), `remote-play-helpers.yml`
+(add `perl` for OpenSSL's configure).
+**Done when.** OpenSSL 3.0 or 3.5 LTS is built `no-shared` from a
+checksum-verified tarball into `DEPS_PREFIX` and found through
+`-DOPENSSL_ROOT_DIR`; `BUILDINFO.txt` names its version; NEEDED is unchanged.
+
+### TEST-17 — Every helper dependency from a verified source, offline configure (P2, S) [NET]
+**Where.** `player/native/build-helpers.sh` (`MINIUPNPC_*`, `LIBEVENT_VERSION`).
+**Done when.** miniupnpc is built statically into `DEPS_PREFIX` like the other
+dependencies; configure runs with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON` and
+BUILDINFO lists nothing fetched by configure; libevent is 2.1.13-stable with its
+tarball's SHA-256 checked against the signed release.
+
+### TEST-18 — A packager's digest for the Box64 source (P3, S) [NET]
+**Where.** `player/native/build-runtimes.sh` (`BOX64_COMMIT`).
+**Done when.** A packager's digest for the v0.4.4 release tarball (AUR, or
+Debian or Alpine once they reach it) is checked once against the tree at the
+pinned commit, and the comment above `BOX64_COMMIT` names that source.
+
+---
+
+## UX and design (UX)
+
+The review behind these is [docs/UX_REVIEW.md](../docs/UX_REVIEW.md).
+
+### UX-4 — One icon stroke weight (P2, M)
+**Where.** `icondefs.go`, `icondraw.go`, `iconatlas.go`.
+**Done when.** Every 32 px glyph uses one stroke weight and outline style (the
+Packages glyph is a filled 3D box among outlines); atlas re-baked.
+
+### UX-8 — Touch targets and safe area everywhere (P2, M)
+**Where.** `touchtarget.go`, scene panels.
+**Done when.** Every pressable control has a ≥ 44 px hit area centred on what is
+drawn; no control sits in the 32 px corner margin.
+
+### UX-9 — Every state for every component (P2, M)
+**Done when.** The ten most-used scenes use `UIEmptyState`/`UIErrorState`/
+`UILoadingSkeleton` and the offline treatment from `offlineaware.go`; a list of
+remaining exceptions is in the PR.
+
+### UX-12 — Every screen on the tokens (P1, M)
+**Done when.** Each uses `ui_glass.go`/`design.go` tokens and roles; a grep for
+`colorNew(`/`sdl.Color{R:` in UI code lists only documented exceptions (art,
+game palettes).
+
+---
+
+## Games and emulation (GAME, PSR, XBX)
+
+### GAME-19 — The game assistant, second round (P3, M)
+**Where.** `gameassist.go`, `gameassist_linux.go`, `voiceorb.go`.
+**Done when.** A follow-up in the overlay keeps the last exchange; the D-pad
+scrolls a long answer; launches from Apps and ports are named in the prompt; on
+a PC **Juka can see the game screen** captures the game's window, and the answer
+shows in an always-on-top overlay.
+
+### PSR-8 — Remote Play through PSN, without port forwarding (P2, L) [NET]
+**Where.** `psn_signin.go` (keeps only the Account-ID today), `psremote*.go`,
+`native/chiaki-stream.c` with chiaki-ng's `lib/include/chiaki/remote/holepunch.h`
+at the pinned commit (read it before writing a call; chiaki-lib already builds
+the curl and miniupnpc it uses).
+**Done when.** After the user turns on **Play away from home**, the PSN refresh
+token is kept (encrypted like the other API tokens, never logged, deleted on
+sign-out) and renews itself; a paired console streams from another network
+with no port forward; a refused or expired token says so; nothing changes for
+someone who never signs in; the docs describe it.
+
+### XBX-3 — Reproducible hakuX build (P3, M) [NET]
+**Done when.** If the port documents its build (TrimUI SDK or
+`ghcr.io/loveretro/tg5040-toolchain`), `.github/workflows/hakux.yml`
+(workflow_dispatch, pinned tag) builds the package and attaches its SHA-256. Do
+not guess build steps.
+
+---
+
+## Game library (LIB)
+
+### LIB-5 — Videos and manuals per game (P2, M) [NET]
+**Where.** `artwork_screenscraper.go` (box art and details for a signed-in
+user), `artstyle_fetch.go` (snaps and title screens), `gmeta_ui.go`, the PDF
+reader, `cachebudget.go`.
+**Done when.** With a ScreenScraper account a game's video and manual are
+fetched on request, the manual opens in the PDF reader, and both stay inside
+the cache budget.
+**Blocked (owner credential).** The first criterion — "With a ScreenScraper
+account" — needs the owner's ScreenScraper login (the account's `devid`/
+`devpassword` for the API, and a member account, since videos are served to
+signed-in members) which no agent has. It cannot be skipped and passed: the
+videos and manuals exist only behind that authenticated API, so there is
+nothing to fetch, open or measure against the cache budget without it. Left
+open for the owner.
+
+### LIB-12 — RetroAchievements: the game's list, and the key (P2, M) [NET]
+**Where.** `retroachievements.go`, `raach_settings.go` (hardcore and the other
+switches), `raach_unlocks.go` (the LED flash on unlock), `gmeta_ui.go`.
+**Done when.** A game's page lists its achievements with the player's
+progress, and the RetroAchievements key is kept in the secret store (SEC-8).
+
+### LIB-15 — A game page worth opening (P2, M)
+**Done when.** The game page (`gmeta_ui.go`) shows the hero art, description,
+screenshots, achievements, last played, playtime graph, the save-state strip
+and Play / Resume / Options as the first three actions (manuals and guides are
+under More → Manual & guide).
+
+## Android games (AND)
+
+### AND-4 — Text input for Android games (P2, M)
+**Done when.** `showKeyboard` opens JukaHub's on-screen keyboard over the game
+(IPC runner ↔ hub) and the text reaches the game through its natives.
+
+### AND-13 — Auto's window fallback adopts a context-first game's context (P3, M)
+**Where.** `androidrt/src/eglpresent.c` (`pr_eglMakeCurrent`,
+`pr_eglCreateContext`, `pr_eglDestroyContext`), `tests/smoke`
+(`EGLTEST_CONTEXT_FIRST`).
+**Done when.** A raw context never yet current is mapped to SDL's at its first
+`eglMakeCurrent` with SDL's surface (destroy and share handled); one made
+current with a pbuffer stays raw; the context-first smoke case asserts 5
+`SDL_GL_SwapWindow` frames.
+
+## Media (MED)
+
+### MED-7 — Crossfade and ReplayGain (P3, S)
+**Where.** `musicplayer.go`, `musicsettings.go`.
+**Done when.** An optional crossfade (0–10 s) overlaps a track's end with the
+next one, and ReplayGain track/album tags (read by ffprobe) set the level when
+switched on; both stay off on the bit-perfect path.
+
+### MED-8 — Podcasts offline (P2, M)
+**Done when.** Episodes download for offline listening (Downloads queue), OPML
+import/export works, chapters are shown, played episodes clean up.
+
+### MED-19 — A JavaScript runtime for yt-dlp on Windows (P1, M) [WIN] [NET]
+**Where.** `ytdlp_update.go`, `ytdownload.go` (`ytDlpJSRuntimeArgs` already
+uses a `qjs` next to yt-dlp), `streaming.go` (`streamAttempts`).
+**Done when.** JukaHub installs a pinned, checksum-verified runtime
+(QuickJS-NG, or Deno ≥ 2.3) next to yt-dlp on Windows; stream attempts prefer
+yt-dlp's default clients while it is there; the Patch screen shows its
+version.
+
+### MED-24 — A YouTube client table that updates without a release (P2, M) [NET]
+**Where.** `youtubenative.go`, `youtubesearch.go`, the update channel.
+**Done when.** A small JSON (client name, version, user agent, client ID,
+order), fetched at most daily and checked (signature or a pinned hash list), is
+cached and used ahead of the built-in table; a bad or unverifiable file is
+ignored with a log line.
+
+---
+
+## System and sync (SYS)
+
+### SYNC-1 — Sync: first-sync choice, more save folders, safe launch order (P2, M)
+**Where.** `synchub*.go`, `savesync_auto.go`, `gdrive_sync.go`,
+`romm_autosync.go`, `romm_server.go`, `ports.go` (`launchLibraryGame`).
+**Done when.** A never-synced device's first sync asks per game "Use Drive's
+copy / Keep this one / Keep both"; ports' and standalone emulators' save
+folders take part; hashing on the launch path is budgeted; a launch waits for
+that game's running push.
+
+### SYS-8 — Storage you can clean up (P2, M)
+**Where.** `systool_disk.go` (Storage), `spaceuse.go` (What's using space),
+`cardtidy.go`, `sdhealth.go`.
+**Done when.** Storage shows usage by kind (games, media, downloads, saves,
+caches, backups, old versions, trash) with one-press clean-ups and warns at
+90 % full; the card's file-system dirty flag is checked at boot.
+
+### SYS-23 — JukaHub OS, second round (P2, M)
+**Where.** `jukaos*.go`, `emulators.go` (`deviceRetroArchCoresDir`),
+`gamelaunch_firmware.go` (`firmwareROMArg`), `elfcompat.go`,
+`ports_catalog.go`, `files_extract_ui.go`, `home_power.go`.
+**Done when.** A per-firmware paths layer dir-binds one stable tree (RetroArch
+cores, system and saves, `Emus/*/`) so nothing guesses among five roots;
+`elfcompat.go` and `ports_catalog.go` also search `JUKAHUB_OS_CHILD_LIBS`;
+Files offers **Install as JukaHub OS layer** for a zip with `layer.json`;
+driver and value changes apply live where possible; a per-session report lists
+what was bound, loaded and skipped; the power card can restart JukaHub OS.
+
+### SYS-25 — Bluetooth, third round (P2, M)
+**Where.** `audioroute*.go`, `bt_audiofollow.go`, `bluetooth_devices_ui.go`
+(Bluetooth already comes back on at start: `bt_bootswitch.go`).
+**Done when.** A headset that connects during a RetroArch game gets its sound
+(a BlueALSA-aware ALSA plug, or a resume-safe restart the user agrees to), and
+a headset's row and sheet show its battery from BlueZ's `Battery1` when it
+reports one.
+
+---
+
+## Network (NET)
+
+### NET-7 — Network drives in Files and for media (P2, M)
+**Where.** `nas*.go` (SMB, WebDAV and SFTP drives already feed the Games
+library), `files_locations.go`, the music and video libraries.
+**Done when.** A network drive can be browsed and copied from in Files, and
+used as a read-only music or video source streamed through its `nasFS`.
+
+### NET-23 — Matter: Apple Home and Google Home accessories without Home Assistant (P2, L) [NET]
+**Where.** New `matter*.go` beside `smarthome_hub.go` (a fourth source of the
+Smart Home tab), `companion_smarthome.go` (the Apple Home card).
+**Why.** Apple Home and Google Home let no other app switch their accessories;
+the one open door is Matter multi-admin (Home app › Turn On Pairing Mode, Google
+Home › Linked Matter apps & services), which today needs Home Assistant in
+between (docs/SMART_HOME.md).
+**Done when.** JukaHub commissions a Matter device over IP from its 11-digit
+pairing code (PASE with SPAKE2+, its own fabric's root and operational
+certificates, CASE) and reads and switches OnOff and LevelControl; SPAKE2+
+(RFC 9383), AES-CCM and the Matter TLV certificate encoding pass their
+published test vectors in one test file, and a run against connectedhomeip's
+Linux `chip-all-clusters-app` in a container commissions it and toggles OnOff.
+
+---
+
+## Sound (SND)
+
+### SND-2 — One audio mixer on the speaker too (P2, M)
+**Where.** `audioroute.go` (the `out*` functions and the mixer), `sound.go`,
+`bootchime.go`, `ledsync.go` (`audioBus`).
+**Done when.** The speaker route uses the same mixer on one stereo device (the
+per-output passthrough is gone), and the LED analyser is fed from the mix.
+
+### SND-11 — The game filter on Windows (P3, S) [WIN]
+**Where.** `player/spatialfx/build.sh` (`TARGET=windows`), the Windows release
+job, `spatial_games.go` (where it looks).
+**Done when.** The Windows archive carries the DLL where `spatial_games.go`
+looks, and a RetroArch game started from the library on Windows plays through
+it.
+
+## Input and controls (INP)
+
+The hint layer (`inputhints.go`) decides whether hints name the pad's buttons or
+the keyboard's keys; these make the rest of the input match it.
+
+### INP-1 — Keyboard parity, screen by screen (P1, M)
+**Where.** Every `handle*Key` and its `*FooterHints`; `inputhints.go`
+(`hintKeyboardTwin`, the `"pad / key"` badge convention); the "Keyboard keys,
+screen by screen" table in `docs/CONTROLS.md`.
+**Done when.** For each screen in `docs/CONTROLS.md`, every footer hint is
+pressable on a keyboard: either the generic twin is true there or the hint is
+written `"<pad> / <key>"`; the table stays in step.
+**Verify.** INP-12's checker reports zero mismatches.
+
+### INP-2 — Sentences that name buttons (P1, M)
+**Where.** The files the grep lists; `hintSentence` in `inputhints.go`.
+**Done when.** Each match goes through `hintSentence` or is rewritten without a
+button, and the grep lists only the deliberate physical exceptions: hakuX's exit
+chord, "Press A on a controller to join" (hotseat), the one-handed help text and
+the `inmap*.go` Select+R1 chord (pad-only: remap, no keyboard words).
+
+### INP-7 — Mouse and touch parity (P2, M)
+**Done when.** Every footer hint badge is clickable (generalise `emuHintHits`),
+right-click is the screen's secondary action (X), the wheel scrolls every list.
+
+### INP-11 — Players and pad status beyond the Bluetooth page (P3, M)
+**Where.** `bt_padinfo.go`, `quicksettings.go`, `gamepad_hotplug.go`,
+`hotseat.go`.
+**Done when.** Quick Settings lists each connected pad with its player number
+and battery (Bluetooth from `bt_padinfo.go`, others from
+`SDL_JoystickCurrentPowerLevel`, so Windows too); the player LED is set where
+the pad has one; hotseat uses the same numbering.
+
+### INP-12 — Hint truth checker (P2, M) [WIN]
+**Where.** A `tools/hintcheck` program (or a scenedump mode, TEST-1) that, for
+each scene and state, renders the footer in both vocabularies and replays each
+hint's key through the scene's key handler with a recording stub.
+**Done when.** A `make` target runs it and lists mismatches.
+
+### INP-19 — Offline voice recognition on Windows (P3, M) [WIN]
+**Where.** `stt_local.go`, `stt_install.go`, the release workflow that builds
+the pack, `voicecmd.go`.
+**Done when.** Decision: the same engines, not System.Speech — a
+`JukaHub-OfflineSpeech-windows-amd64.zip` pack is built and published, installs
+like the arm64 one, and on a PC without a Groq key Voice command, the orb and
+voice typing work offline; with the pack missing they say so and keep the Groq
+path.
+
+---
+
+## Shell (SHELL)
+
+---
+
+## Power and battery (PWR)
+
+---
+
+## Reliability and updates (REL)
+
+### REL-8 — One reproducible release pipeline with an SBOM (P1, M) [NET]
+**Where.** `.github/workflows/release.yml` (tags) and `docker-image.yml` (each
+push to main), `.github/scripts/trimui-build.sh`, `player/build.bat`,
+`player/release.sh`.
+**Done when.** One release workflow (pull requests build but never tag); every
+release build uses `-trimpath`, `SOURCE_DATE_EPOCH` and pinned toolchains and
+carries an SPDX SBOM and SLSA provenance; asset names match `patch_swap.go`;
+release notes come from the tag's CHANGELOG section.
+
+### REL-15 — Watch updates on the JukaHub OS SD image too (P2, M)
+**Where.** `player/cmd/jukaboot/launch_linux.go`, `os/smartpro/launch.sh`,
+`player/updrescue.go`, `player/startcheck.go`.
+**Done when.** jukaboot exports the variable and runs the same watchdog (ready
+within the limit, a `SIGABRT` dump, one restore, `.update-rescued`), and
+a stub launcher that hangs before its first frame is put back by the same
+watchdog.
+
+---
+
+## Languages (I18N)
+
+### I18N-1 — The string catalogue, finished (P1, M)
+**Where.** `i18n.go`, `player/i18n/`, the `SizeUTF8` call sites, a check under
+`tools/`.
+**Done when.** Plurals follow CLDR rules for each shipped language; every
+measurement goes through the translated text; the first start picks the OS or
+firmware locale when a catalogue exists; a CI check lists untranslated strings
+per language; missing translations fall back to English.
+
+### I18N-4 — Input methods (P2, L)
+**Done when.** The on-screen keyboard has pinyin and kana composition with a
+candidate strip (`vkeyboard.go` already has a suggestion strip); physical
+keyboards get `SDL_TEXTEDITING` handling.
+
+## Security and privacy (SEC)
+
 ### SEC-1 — Every extraction through `os.Root` (P2, M)
 **Where.** `emu7z.go`, `ports_store_install.go`, `ppsspp_managed.go`,
 `tts_install.go`, `emulatorupdates.go`, `androidpak.go`, `relpack.go`,
@@ -73,6 +445,57 @@ draw, present, pace) in their own files; `core.go` is split by responsibility
 (`patch_engine.go`, `openExtractRoot`) and `pkgExtractZip` are the pattern.
 **Done when.** Each writes through an `os.Root` opened on its destination;
 traversal tests stay green.
+
+### SEC-6 — Plugin permissions and signing (P1, L) [OWNER]
+**Done when.** Manifests declare permissions (network, files outside the
+plugin folder, run programs, settings); the install sheet lists them; scripts run
+with a minimal environment, a working directory inside the plugin, a timeout and
+(on Linux) a dropped-privilege user if the image allows; catalogue plugins are
+signed and sideloaded ones say so; an ADR in `docs/adr/` records the sandbox.
+
+### SEC-8 — Secrets that are actually secret (P1, M)
+**Where.** `crypto.go`, `retroachievements.go`, `chat.go`.
+**Done when.** The key is device-bound (Windows DPAPI; TrimUI: random key in a
+`0600` file outside the user-visible tree, created on first run); existing
+secrets are re-encrypted; a config copied to another device asks for its secrets
+again instead of failing; RA and every API key go through the store; Discord
+uses bot or OAuth tokens only.
+
+### SEC-29 — Build the arm64 parts as an unprivileged user (P3, S)
+**Where.** `.github/scripts/build-root.sh` (`in_root`, `build`, `check`),
+`player/native/build-helpers.sh`, `build-runtimes.sh`.
+**Done when.** `build` and `check` run the scripts as a build user (`chroot
+--userspec`) owning only the folders they write (`DEPS_PREFIX`,
+`/tmp/jukahub-*`, `player/native/bin`); `create` and package installs stay
+root; one helper and one Box64 run still pass, with `id` in the log.
+
+### SEC-30 — Startup lock, the remaining paths (P2, M)
+**Where.** `peernet.go`, `livebuilder.go`, the Steam OpenID return,
+`powersleep.go` and the parked game loop in `main.go`, Reset settings, backup
+restore, config history, plugin startup hooks, `bootlock_ui.go`.
+**Done when.** While locked, paired devices' sync and hand-off, the Live
+Builder and a Steam sign-in are refused; a game paused by sleep stays paused
+under the lock; Reset settings, a restore or a config rollback cannot change
+the lock without the code; plugin startup actions wait for the unlock; a PC
+mouse can click the lock's power choices; the PBKDF2 cost is timed on the A133
+(under about a second, else fewer iterations for new hashes).
+
+---
+
+## Apps platform (APP)
+
+### APP-1 — A store worth browsing (P2, M) [NET]
+**Done when.** Catalogue entries carry screenshots, a description, size,
+licence, source link and dependencies that install first; "Update all"; a
+changelog per update; installs stay verified and staged (`pkgstage.go`) and
+the catalogue is signed (SEC-16).
+
+### APP-4 — Files that forgive (P1, M)
+**Done when.** Delete moves to a `.trash` per volume (bounded by size and age,
+"Empty trash" in the storage view, SYS-8), **Compress to zip** makes an archive
+of the marked rows, Files has a filter-as-you-type search, and copy and move
+run off-thread with progress (the extraction queue in `files_extract.go` is
+the model: one job at a time, a staging folder, a drain on the SDL thread).
 
 ### APP-10 — Live bindings between ES modules (P2, M)
 **Where.** `webdom_module.go` (references to imported names),
@@ -82,6 +505,19 @@ exporting module's namespace (with scope analysis in the rewrite, so local
 variables and property names of the same spelling stay untouched), cycles
 evaluate in the standard's order, and a test links a two-module cycle that
 reassigns an exported `let`.
+
+### APP-22 — Typing in Windows programs (P2, M)
+**Where.** `vcursor_bridge_linux.go` (the "JukaHub Mouse" uinput device, which
+already declares keys 1–255), `companion*.go`.
+**Done when.** Text typed on the phone companion (or picked letter by letter
+with a pad chord) reaches the running program as key presses through the
+JukaHub Mouse device, and the pad is the mouse again afterwards.
+
+---
+
+## Windows desktop (DESK)
+
+## Web builder (WEB)
 
 ### WEB-1 — Split `script.js` into modules (P1, L)
 **Done when.** ES modules by concern (canvas, inspector, scenes, export/import,
@@ -93,3 +529,142 @@ validation, gallery, AI panel), the CSP still holds (`_headers`), and the jsdom
 Each needs something only the owner can give — an account, a key, a secret,
 a person — before an agent can finish it.
 
+### REL-13 — Turn on the bug-report service (P1, S) [OWNER] [NET]
+**Where.** Netlify → generate.jukalang.com → Environment variables;
+[docs/BUG_REPORTS.md](../docs/BUG_REPORTS.md).
+**Done when.** `JUKAHUB_GITHUB_TOKEN` (a bot account's token with Issues
+read/write on jukaLang/JukaHubV2) is set and deployed; `curl -i` on the address
+answers 405 with `"configured": true`; a report from a device becomes an issue
+with the `from-device` label and the sent sheet shows its number.
+
+### REL-3 — Signed updates only (P1, M) [OWNER]
+**Done when.** CI signs every release manifest with a production key held as a
+secret (ceremony in `docs/UPDATER_TUF.md`), listing every asset including the
+`JukaHub-RemotePlay`, `JukaHub-AndroidRT` and `JukaHub-Wine` zips (the helper
+installer and `relpack.go` check them against it); the app embeds the key plus
+one rotation slot; an unsigned or expired manifest is refused with a clear
+message (sideload keeps its explicit trust prompt).
+
+### SEC-16 — Signed package catalogue, hashes mandatory (P1, M) [OWNER] [NET]
+**Where.** jukaLang/Packages (`packages.json`), `pkgverify.go`
+(`pkgApplyIntegrity`), `pkgstate.go` (`pkgCatalogFetcher`), `patch_signed.go`,
+`docs/PACKAGES.md`.
+**Done when.** The registry's CI writes `sha256` and `size` for every entry and
+a detached Ed25519 `packages.json.sig` with the production key (REL-3); the
+store verifies it on fetch (offline keeps the last verified list); once every
+entry has a hash, one without is refused and "Not verified" goes; a test feeds
+a tampered list and a missing hash.
+
+### DESK-5 — Code signing (P2, S) [WIN] [OWNER]
+**Done when.** Release executables and the installer are Authenticode-signed
+(Azure Trusted Signing or SignPath's free OSS programme) so SmartScreen stops
+warning.
+
+### I18N-5 — Human translations (P2, M) [OWNER]
+**Done when.** A translation platform (Weblate or Crowdin, free for OSS) is set
+up on the catalogue; Spanish, Portuguese (Brazil), Russian, German and French
+are reviewed for Home and Settings; Japanese, Korean and Chinese (Simplified),
+machine-translated on 2026-11-24 (about 1,070 strings each), are reviewed by
+speakers.
+
+### I18N-UK-1 — The Ukrainian catalogue, finished (P3, M)
+**Where.** `player/i18n/uk.json`, a new `player/i18n/uk.tour.json`.
+**Done when.** Every key of `ru.json` and `ru.tour.json` has a Ukrainian value
+written or checked by a Ukrainian speaker, and the catalogue test passes.
+
+---
+
+## Ideas parking lot
+
+Not tasks yet: each needs a *Why* and a *Done when* before it moves up. Sizes
+are rough.
+
+- **Theme from an image** (M): median-cut palette into the 16 theme roles, on
+  `themeloader.go`.
+- **Seasonal themes by date** (S): the time-of-day hook exists; add a date
+  table.
+- **Toys** (S–M each): time capsule / sealed notes, secret modes, playable
+  credits, virtual pet, retro OS skin pack, arcade kiosk.
+- **Save forensics** (M): list + diff two snapshots.
+- **Randomizer suite** (L): start with an IPS/BPS patch applier.
+- **Speedrun timer/splits** (M): no auto-split (needs memory reads).
+- **LAN arcade leaderboard** (S–M) for JukaHub's own games.
+- **Bigger projects**: Steam Deck pairing (L), Juka playground (M), fantasy
+  console (XL). (Paint already draws pixel art.)
+- **Per-game colour filters** (S, muOS has them): a colour matrix per game on
+  top of the accessibility palettes.
+- **"Play style" profile** (S): when and what you play, from the playtime
+  session log.
+- **Tabs Home extras** (S each): an unread dot on the tab that holds Chat; a
+  per-tab accent tint of the strip's pill; each tab's scroll kept across
+  restarts; hold A on the strip to arrange; a crossfade between tabs under
+  Reduce motion.
+- **Per-game hakuX settings** (S): once the package's per-title settings layout
+  is known, the game options sheet opens it for Xbox games.
+- **Event webhooks** (S): opt-in POSTs for game launched / trophy unlocked /
+  install finished (bounded queue, no secrets in payloads).
+- **Community widgets** (M): a widget for Home's Widgets layout
+  (`home_widgetdraw.go`) as a sandboxed JSON descriptor (text or a number from a
+  local source, refresh interval) delivered as a package; no code.
+- **Ghost Challenges for RetroArch games** (L): the arcade games race a
+  friend's run since 2026-11-24 (`ghost.go`); for an emulated game, record
+  RetroArch's input replay (`-R` / `-P`, a BSV file that starts from a save
+  state) with the ROM's CRC and the core's name and version, send it the same
+  way, and race on the same core and ROM; replays only hold for the same core
+  build, core options and ROM, so the challenge card has to check all three.
+- **Pocket Studio** (L): make a tiny playable game with the
+  D-pad (a tile map, a sprite, a few rules) and share its cartridge with
+  another JukaHub; a single-file cart (like the fantasy consoles' picture
+  carts) and the Nearby devices transfer are the natural carriers.
+- **Kodi remote** (S–M): drive a Kodi box on the home network over its
+  JSON-RPC API (play, pause, seek, browse) from the Media screen.
+- **Xbox 360 digital games** (S): list STFS packages under `Roms/XBOX360`
+  (no extension; `LIVE`, `PIRS` or `CON ` magic), titled from the package
+  header, for Xenia Canary.
+- **Package split, step 4** (XL): chat, Wi-Fi, party and peers, JukaLand,
+  minigames, smart home and RetroAchievements each behind a small interface to
+  `main`, one task per island, once the earlier split steps have landed.
+- **Android class packs on demand** (M): SDL2's Java glue
+  (`org/libsdl/app/SDLActivity`) and Unity's `UnityPlayer`, when real
+  compatibility reports ask for them.
+- **Terraria through FNA** (M): a PortMaster-style recipe that runs the PC
+  version with FNA and Mono on aarch64 from files the user copies.
+- **A built-in comic reader** (M): CBZ/CBR/CB7 with fit width or height, a
+  two-page spread and right-to-left; "Open with KOReader" covers them today.
+- **Sound packs** (M): chime and UI-sound variants as a package category, as
+  scores and constants rather than samples.
+- **Builder element factory** (M): the web builder's element markup from one
+  component factory instead of per-type assembly.
+- **Clock faces** (M): analogue, digital and minimal faces for the screensaver
+  and the dock, with OLED-safe pixel shift, as a theme token.
+- **Right-to-left layout** (L): a mirrored Home grid, lists and footers with
+  `golang.org/x/text/unicode/bidi`, once an Arabic or Hebrew catalogue exists.
+- **Discord Rich Presence on a PC** (S): opt-in, over Discord's local IPC pipe;
+  no account tokens.
+- **A motion system** (M): enter, exit, focus and sheet transitions on
+  `motion.go`'s curves everywhere, honouring reduced motion and the Animations
+  speed, with one entrance for the Start menu, sheets and toasts.
+- **Battery estimates per activity** (M): a learned drain rate per activity in
+  `battery_eta.go`, and a stream's rate from the Remote Play helper's status
+  file.
+- **Recent screens switcher** (S): hold Start (Alt+Tab on a keyboard) for the
+  last five screens as cards.
+- **TV guide** (M): XMLTV now/next for M3U playlists that name one (`url-tvg`).
+- **Move to a new device** (M): Send my settings also carries the wallpaper,
+  the theme files and the installed package list, reinstalled in one flow.
+- **Import from the stock launcher** (M): MainUI favourites, recents and
+  playtime, and muOS collections, offered at the first start.
+- **Discrete 5.1 and 7.1 under spatial audio** (M): each channel from its own
+  virtual loudspeaker (`spatial_dsp.go`), with golden vectors.
+- **Add JukaHub to Steam** (S): a non-Steam shortcut with art from `branding/`,
+  and Steam Input's virtual pad as the hint vocabulary.
+- **Open with JukaHub** (S): files and `--scene` on the command line,
+  registered by the installer.
+- **Windows toasts** (S): downloads, alarms and updates as Windows
+  notifications while minimised (the AUMID comes with the installer).
+- **Keyboard profiles** (M): key-to-action bindings in the control-profile
+  engine (`inmap*.go`), read by the hint layer.
+- **The builder as a PWA** (M): a service worker with a versioned cache and a
+  "new version" prompt.
+- **Verified dumps** (M): No-Intro and Redump DATs as a package, background
+  CRC/SHA-1 checks, Verified / Unknown / Bad dump badges.

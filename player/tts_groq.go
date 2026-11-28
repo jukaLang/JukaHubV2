@@ -133,49 +133,11 @@ func ttsGroqSpeak(ctx context.Context, key, voice, text string) ([]int16, int, e
 
 // ttsGroqRequest is one request.
 func ttsGroqRequest(ctx context.Context, key, voice, text string) ([]int16, int, error) {
-	body, err := json.Marshal(map[string]string{
-		"model":           ttsGroqModel,
-		"input":           text,
-		"voice":           voice,
-		"response_format": "wav",
-	})
+	resp, err := ttsGroqOpen(ctx, key, voice, text)
 	if err != nil {
 		return nil, 0, err
-	}
-	// Groq answers a chunk in a second or two. One that has not begun to answer
-	// by ttsGroqAnswerMax is given up, so the device's voice takes over while
-	// the user still waits, not after the whole ttsGroqTimeout.
-	reqCtx, cancelReq := context.WithCancel(ctx)
-	defer cancelReq()
-	slow := time.AfterFunc(ttsGroqAnswerMax, cancelReq)
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ttsGroqEndpoint, bytes.NewReader(body))
-	if err != nil {
-		slow.Stop()
-		return nil, 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "audio/wav")
-	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := ttsGroqHTTP.Do(req)
-	late := !slow.Stop()
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, 0, ctx.Err()
-		}
-		if late {
-			return nil, 0, &ttsError{fail: ttsFailServer, msg: "Groq's voice did not answer in time", err: err}
-		}
-		fail := ttsFailServer
-		if plainNetworkError(err) == offlinePlainNotice {
-			fail = ttsFailOffline
-		}
-		return nil, 0, &ttsError{fail: fail, msg: "Groq's voice could not be reached", err: err}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return nil, 0, ttsGroqFailure(resp.StatusCode, resp.Header, raw)
-	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, ttsGroqMaxBytes+1))
 	if err != nil {
 		if ctx.Err() != nil {
@@ -191,6 +153,91 @@ func ttsGroqRequest(ctx context.Context, key, voice, text string) ([]int16, int,
 		return nil, 0, &ttsError{fail: ttsFailServer, msg: "Groq's voice sent unplayable audio", err: err}
 	}
 	return samples, rate, nil
+}
+
+// ttsGroqStream asks for a chunk and decodes the WAV as the response arrives,
+// handing each PCM block to sink (SND-14). A limit of a second or two is not
+// retried here: the caller falls back to the device voice once a block has
+// played, and a retry could repeat words.
+func ttsGroqStream(ctx context.Context, key, voice, text string, sink func([]int16, int) bool) (int, error) {
+	resp, err := ttsGroqOpen(ctx, key, voice, text)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	rate, err := ttsDecodeWAVStream(io.LimitReader(resp.Body, ttsGroqMaxBytes), true, sink)
+	if err != nil {
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return 0, &ttsError{fail: ttsFailServer, msg: "Groq's voice sent unplayable audio", err: err}
+	}
+	return rate, nil
+}
+
+// ttsGroqOpen sends one request and returns the 200 response with its body
+// open; every other answer is the request's ttsError. The answer timeout only
+// covers the wait for Groq to start answering: the body is read by the caller
+// after this returns, so a slow download is not cut off mid-word.
+func ttsGroqOpen(ctx context.Context, key, voice, text string) (*http.Response, error) {
+	body, err := json.Marshal(map[string]string{
+		"model":           ttsGroqModel,
+		"input":           text,
+		"voice":           voice,
+		"response_format": "wav",
+	})
+	if err != nil {
+		return nil, err
+	}
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	slow := time.AfterFunc(ttsGroqAnswerMax, cancelReq)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ttsGroqEndpoint, bytes.NewReader(body))
+	if err != nil {
+		slow.Stop()
+		cancelReq()
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "audio/wav")
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := ttsGroqHTTP.Do(req)
+	late := !slow.Stop()
+	if err != nil {
+		cancelReq()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if late {
+			return nil, &ttsError{fail: ttsFailServer, msg: "Groq's voice did not answer in time", err: err}
+		}
+		fail := ttsFailServer
+		if plainNetworkError(err) == offlinePlainNotice {
+			fail = ttsFailOffline
+		}
+		return nil, &ttsError{fail: fail, msg: "Groq's voice could not be reached", err: err}
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		_ = resp.Body.Close()
+		cancelReq()
+		return nil, ttsGroqFailure(resp.StatusCode, resp.Header, raw)
+	}
+	resp.Body = &ttsCancelBody{ReadCloser: resp.Body, cancel: cancelReq}
+	return resp, nil
+}
+
+// ttsCancelBody releases the request context when the body is closed.
+type ttsCancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *ttsCancelBody) Close() error {
+	err := b.ReadCloser.Close()
+	if b.cancel != nil {
+		b.cancel()
+	}
+	return err
 }
 
 // ttsGroqFailure reads a refusal: its status, its retry-after header and the
