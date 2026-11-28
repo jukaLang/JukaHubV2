@@ -52,7 +52,9 @@ const (
 	solMenuRestart
 	solMenuDraw
 	solMenuAuto
+	solMenuGame
 	solMenuStats
+	solMenuResetStats
 	solMenuQuit
 	solMenuRows
 )
@@ -122,7 +124,7 @@ var solUI struct {
 		start   time.Time
 		last    time.Time
 		spawned int
-		taken   [solKPiles]int // cards launched off each foundation
+		taken   [solMaxPiles]int // cards launched off each foundation
 		cards   []solFly
 		rng     *rand.Rand
 	}
@@ -152,7 +154,7 @@ type solLayout struct {
 	cw, ch, gap, radius int32
 	left, top, tabY     int32
 	bottom              int32
-	pileX, pileY        [solKPiles]int32
+	pileX, pileY        [solMaxPiles]int32
 	wasteFan            int32 // x step between the waste's fanned cards
 	downStep, upStep    int32 // a column's steps before compression
 	rankPx              int
@@ -171,7 +173,9 @@ func solComputeLayout() solLayout {
 	availW := screenWidth - 2*padX
 	availH := L.bottom - L.top
 	gap := min(max(availW/80, 6), 16)
-	cw := (availW - 6*gap) / 7
+	g := sol.game
+	cols := solColumnCountFor(g)
+	cw := (availW - int32(cols-1)*gap) / int32(cols)
 	ch := (availH - gap) * 10 / 36
 	if byHeight := ch * 100 / 142; byHeight < cw {
 		cw = byHeight
@@ -180,16 +184,23 @@ func solComputeLayout() solLayout {
 	ch = cw * 142 / 100
 	L.cw, L.ch, L.gap = cw, ch, gap
 	L.radius = max(cw/12, 3)
-	L.left = (screenWidth - (7*cw + 6*gap)) / 2
+	L.left = (screenWidth - (int32(cols)*cw + int32(cols-1)*gap)) / 2
 	L.tabY = L.top + ch + max(gap, ch/10)
 	col := func(i int) int32 { return L.left + int32(i)*(cw+gap) }
-	L.pileX[solKStock], L.pileY[solKStock] = col(0), L.top
-	L.pileX[solKWaste], L.pileY[solKWaste] = col(1), L.top
-	for f := 0; f < 4; f++ {
-		L.pileX[solKFound0+f], L.pileY[solKFound0+f] = col(3+f), L.top
-	}
-	for c := 0; c < 7; c++ {
-		L.pileX[solKTab0+c], L.pileY[solKTab0+c] = col(c), L.tabY
+	if g != nil && g.variant == solVariantFreeCell {
+		for p := 0; p < 8; p++ {
+			L.pileX[p], L.pileY[p] = col(p), L.top
+			L.pileX[solFTab0+p], L.pileY[solFTab0+p] = col(p), L.tabY
+		}
+	} else {
+		L.pileX[solKStock], L.pileY[solKStock] = col(0), L.top
+		L.pileX[solKWaste], L.pileY[solKWaste] = col(1), L.top
+		for f := 0; f < 4; f++ {
+			L.pileX[solKFound0+f], L.pileY[solKFound0+f] = col(3+f), L.top
+		}
+		for c := 0; c < 7; c++ {
+			L.pileX[solKTab0+c], L.pileY[solKTab0+c] = col(c), L.tabY
+		}
 	}
 	L.wasteFan = cw / 5
 	L.downStep = max(ch/11, 4)
@@ -289,14 +300,44 @@ func (L *solLayout) dropPos(g *solGame, p int) (int32, int32) {
 
 // ── Focus ─────────────────────────────────────────────────────────────────
 
-// solTopRow is the top row's piles left to right.
-var solTopRow = [...]int{solKStock, solKWaste, solKFound0, solKFound0 + 1, solKFound0 + 2, solKFound0 + 3}
+// The top row differs by variant: Klondike has the stock, waste and four
+// foundations over seven columns; FreeCell has four cells and four
+// foundations over eight. All of these take the live game so a saved variant
+// changes the layout without a second global.
+func solTopRowFor(g *solGame) []int {
+	if g != nil && g.variant == solVariantFreeCell {
+		return []int{solFCell0, solFCell0 + 1, solFCell0 + 2, solFCell0 + 3,
+			solFFound0, solFFound0 + 1, solFFound0 + 2, solFFound0 + 3}
+	}
+	return []int{solKStock, solKWaste, solKFound0, solKFound0 + 1, solKFound0 + 2, solKFound0 + 3}
+}
 
-func solInTopRow(p int) bool { return p >= 0 && p < solKTab0 }
+func solFirstTabFor(g *solGame) int {
+	if g != nil && g.variant == solVariantFreeCell {
+		return solFTab0
+	}
+	return solKTab0
+}
 
-// solColumnOf is the column a pile sits in (the top row's piles stand over
-// columns 0, 1 and 3 to 6).
-func solColumnOf(p int) int {
+func solColumnCountFor(g *solGame) int {
+	if g != nil && g.variant == solVariantFreeCell {
+		return 8
+	}
+	return 7
+}
+
+func solInTopRowFor(g *solGame, p int) bool { return p >= 0 && p < solFirstTabFor(g) }
+
+func solColumnOfFor(g *solGame, p int) int {
+	if g != nil && g.variant == solVariantFreeCell {
+		if p >= solFTab0 && p < solFPiles {
+			return p - solFTab0
+		}
+		if p >= 0 && p < solFTab0 {
+			return p
+		}
+		return 0
+	}
 	switch {
 	case p == solKStock:
 		return 0
@@ -310,9 +351,15 @@ func solColumnOf(p int) int {
 	return 0
 }
 
-// solTopAt is the top-row pile over a column; the empty place over column 2
-// belongs to the waste.
-func solTopAt(col int) int {
+// solTopAt is the top-row pile over a column; in Klondike the empty place
+// over column 2 belongs to the waste.
+func solTopAtFor(g *solGame, col int) int {
+	if g != nil && g.variant == solVariantFreeCell {
+		if col < 4 {
+			return solFCell0 + col
+		}
+		return solFFound0 + min(col-4, 3)
+	}
 	switch {
 	case col <= 0:
 		return solKStock
@@ -325,10 +372,10 @@ func solTopAt(col int) int {
 // solClampFocus keeps the focus on a pile and the depth inside the run that
 // can be lifted there.
 func solClampFocus() {
-	if solUI.focus < 0 || solUI.focus >= solKPiles {
+	g := sol.game
+	if solUI.focus < 0 || g == nil || solUI.focus >= len(g.piles) {
 		solUI.focus = solKStock
 	}
-	g := sol.game
 	if g == nil || g.kinds[solUI.focus] != solPileTableau {
 		solUI.depth = 1
 		return
@@ -355,7 +402,7 @@ func solitaireEnter(config *Config) {
 	solUI.flying, solUI.autoPending, solUI.finishing = false, false, false
 	solUI.cascade.active = false
 	solUI.cascade.cards = solUI.cascade.cards[:0]
-	solUI.cascade.taken = [solKPiles]int{}
+	solUI.cascade.taken = [solMaxPiles]int{}
 	g := sol.game
 	solUI.winHandled = g != nil && g.won
 	solUI.winPanel = solUI.winHandled
@@ -443,13 +490,19 @@ func solitaireFooterHints() []FooterHint {
 			draw.Label = "Finish"
 		}
 	}
+	if g != nil && g.variant == solVariantFreeCell && draw.Label == "Draw" {
+		draw = FooterHint{} // there is no stock to turn
+	}
 	hints := []FooterHint{
 		{Button: "D-Pad", Label: "Move"},
 		a,
-		draw,
-		{Button: "Y / F", Label: "Smart move"},
-		{Button: "L1 / Z", Label: "Undo"},
 	}
+	if draw.Label != "" {
+		hints = append(hints, draw)
+	}
+	hints = append(hints,
+		FooterHint{Button: "Y / F", Label: "Smart move"},
+		FooterHint{Button: "L1 / Z", Label: "Undo"})
 	if g != nil && len(g.redo) > 0 {
 		hints = append(hints, FooterHint{Button: "R1 / R", Label: "Redo"})
 	}
@@ -549,7 +602,7 @@ func solHitTest(L *solLayout, mx, my int32) (pile, depth int, ok bool) {
 	if g == nil {
 		return -1, 0, false
 	}
-	for _, p := range solTopRow {
+	for _, p := range solTopRowFor(g) {
 		x, y, w := L.pileX[p], L.pileY[p], L.cw
 		if p == solKWaste && g.draw == 3 {
 			w += 2 * L.wasteFan
@@ -558,8 +611,8 @@ func solHitTest(L *solLayout, mx, my int32) (pile, depth int, ok bool) {
 			return p, 1, true
 		}
 	}
-	for c := 0; c < 7; c++ {
-		p := solKTab0 + c
+	for c := 0; c < solColumnCountFor(g); c++ {
+		p := solFirstTabFor(g) + c
 		x := L.pileX[p]
 		if mx < x || mx >= x+L.cw || my < L.tabY {
 			continue
@@ -687,33 +740,34 @@ func solNavigate(act solAction) bool {
 		if act == solActLeft {
 			dx = -1
 		}
-		if solInTopRow(p) {
+		top, first, cols := solTopRowFor(g), solFirstTabFor(g), solColumnCountFor(g)
+		if solInTopRowFor(g, p) {
 			i := 0
-			for k, q := range solTopRow {
+			for k, q := range top {
 				if q == p {
 					i = k
 				}
 			}
-			solUI.focus = solTopRow[(i+dx+len(solTopRow))%len(solTopRow)]
+			solUI.focus = top[(i+dx+len(top))%len(top)]
 		} else {
-			solUI.focus = solKTab0 + (p-solKTab0+dx+7)%7
+			solUI.focus = first + (p-first+dx+cols)%cols
 		}
 		solUI.depth = 1
 	case solActUp:
 		switch {
-		case solInTopRow(p):
+		case solInTopRowFor(g, p):
 			// Up from the top row reaches the header, unless cards are held.
 			return solUI.held
 		case !solUI.held && solUI.depth < g.runLen(p):
 			solUI.depth++
 		default:
-			solUI.focus = solTopAt(solColumnOf(p))
+			solUI.focus = solTopAtFor(g, solColumnOfFor(g, p))
 			solUI.depth = 1
 		}
 	case solActDown:
 		switch {
-		case solInTopRow(p):
-			solUI.focus = solKTab0 + solColumnOf(p)
+		case solInTopRowFor(g, p):
+			solUI.focus = solFirstTabFor(g) + solColumnOfFor(g, p)
 			solUI.depth = 1
 		case !solUI.held && solUI.depth > 1:
 			solUI.depth--
@@ -954,7 +1008,7 @@ func solOnWin(now time.Time, quiet bool) {
 	c := &solUI.cascade
 	c.active, c.start, c.last, c.spawned = true, now, now, 0
 	c.cards = c.cards[:0]
-	c.taken = [solKPiles]int{}
+	c.taken = [solMaxPiles]int{}
 	c.rng = rand.New(rand.NewSource(now.UnixNano()))
 }
 
@@ -962,7 +1016,7 @@ func solOnWin(now time.Time, quiet bool) {
 func solEndCascade() {
 	solUI.cascade.active = false
 	solUI.cascade.cards = solUI.cascade.cards[:0]
-	solUI.cascade.taken = [solKPiles]int{}
+	solUI.cascade.taken = [solMaxPiles]int{}
 	solUI.winPanel = true
 }
 
@@ -980,8 +1034,9 @@ func solStepCascade(now time.Time, L *solLayout) {
 	scale := float64(L.cw) / 114
 	for c.spawned < 52 && now.Sub(c.start) >= time.Duration(c.spawned)*solCascadeEvery {
 		launched := false
-		for k := 0; k < 4 && !launched; k++ {
-			f := solKFound0 + (c.spawned+k)%4
+		found := g.foundations()
+		for k := 0; k < len(found) && !launched; k++ {
+			f := found[(c.spawned+k)%len(found)]
 			idx := len(g.piles[f]) - 1 - c.taken[f]
 			if idx < 0 {
 				continue
@@ -1112,9 +1167,34 @@ func solMenuActivate(config *Config) {
 		}
 		solMarkDirty()
 		PlayNavSound()
+	case solMenuGame:
+		if solGameInProgress() && solUI.menuArmed != row {
+			solUI.menuArmed = row
+			PlayNavSound()
+			return
+		}
+		next := solVariantKlondike
+		if sol.opts.Variant == solVariantKlondike {
+			next = solVariantFreeCell
+		}
+		solSetVariant(next)
+		solUI.menuOpen, solUI.menuArmed = false, -1
+		solResetTable()
+		PlayActivateSound()
 	case solMenuStats:
 		solUI.statsOpen = true
 		PlayActivateSound()
+	case solMenuResetStats:
+		if solUI.menuArmed != row {
+			solUI.menuArmed = row
+			PlayNavSound()
+			return
+		}
+		sol.stats = solStats{}
+		sol.statsByVariant[sol.opts.Variant] = sol.stats
+		solUI.menuArmed = -1
+		solMarkDirty()
+		ShowToast("Statistics for this game reset", ToastKindInfo)
 	case solMenuQuit:
 		solUI.menuOpen = false
 		solLeaveScene(config)
@@ -1147,8 +1227,21 @@ func solMenuLabel(row int) (string, string) {
 			return "Auto-move", "On"
 		}
 		return "Auto-move", "Off"
+	case solMenuGame:
+		if armed {
+			return "Switch game?", hintSentence("%s again", "A", "Game")
+		}
+		if sol.opts.Variant == solVariantFreeCell {
+			return "Game", "FreeCell"
+		}
+		return "Game", "Klondike"
 	case solMenuStats:
 		return "Statistics", ""
+	case solMenuResetStats:
+		if armed {
+			return "Reset statistics?", hintSentence("%s again", "A", "Reset statistics")
+		}
+		return "Reset statistics", ""
 	case solMenuQuit:
 		return "Quit", ""
 	}
@@ -1293,7 +1386,7 @@ func renderSolitaire(renderer *sdl.Renderer, config *Config) {
 	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
-	for p := 0; p < solKPiles; p++ {
+	for p := 0; g != nil && p < len(g.piles); p++ {
 		solDrawPile(renderer, config, &L, p)
 	}
 	solDrawInfo(renderer, config, &L)
@@ -1525,6 +1618,9 @@ func solDrawRing(r *sdl.Renderer, L *solLayout, x, y, h int32, c sdl.Color) {
 // the third column, when there is room for them.
 func solDrawInfo(r *sdl.Renderer, config *Config, L *solLayout) {
 	g := sol.game
+	if g == nil || g.variant == solVariantFreeCell {
+		return // every top-row slot is a cell or foundation; no empty gap
+	}
 	left := L.pileX[solKWaste] + L.cw
 	if g.draw == 3 {
 		left += 2 * L.wasteFan
@@ -1592,6 +1688,9 @@ func solDrawMenu(r *sdl.Renderer, config *Config) {
 	pad := int32(20)
 	drawText(r, font, "Solitaire", sheet.X+pad, sheet.Y+12, ColorTextPrimary(), textAlignLeft)
 	sub := "Klondike"
+	if sol.opts.Variant == solVariantFreeCell {
+		sub = "FreeCell"
+	}
 	drawText(r, small, sub, sheet.X+sheet.W-pad, sheet.Y+12+int32(font.Height()-small.Height())/2, ColorTextTertiary(), textAlignRight)
 	y := sheet.Y + titleH
 	for i := 0; i < solMenuRows; i++ {

@@ -365,6 +365,17 @@ func (g *solGame) canDrop(cards []solCard, p int) bool {
 	return false
 }
 
+// foundations is the list of foundation piles in this layout.
+func (g *solGame) foundations() []int {
+	var out []int
+	for p, k := range g.kinds {
+		if k == solPileFoundation {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // emptyCells and emptyColumns feed FreeCell's supermove limit. A destination
 // column that is itself empty does not count: the moving run fills it.
 func (g *solGame) emptyCells() int {

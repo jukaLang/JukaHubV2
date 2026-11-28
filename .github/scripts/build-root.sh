@@ -163,9 +163,16 @@ create() {
         python3-setuptools python3-wheel unzip xz-utils zip
     # 20.04's pip predates the wheel tags current cmake and grpcio-tools
     # publish (manylinux_2_17), and would fall back to compiling them. Its
-    # wheel is hashed from PyPI like the tools below (TEST-15).
+    # wheel is hashed from PyPI like the tools below (TEST-15). The pin goes
+    # through a requirements file inside the root: --hash is a
+    # per-requirement option only a requirements file may carry, and on the
+    # command line pip reads 'pip==24.0 --hash=sha256:...' as one requirement
+    # and rejects it ("Invalid requirement").
+    cr_pip_pin=/tmp/jukahub-pip-upgrade.txt
+    printf '%s\n' 'pip==24.0 --hash=sha256:ba0d021a166865d2265246961bec0152ff124de910c5cc39f1156ce3fa7c69dc' \
+        | sudo tee "$ROOTFS$cr_pip_pin" > /dev/null
     quietly pip in_root python3 -m pip install -q --no-cache-dir --only-binary=:all: \
-        --require-hashes 'pip==24.0 --hash=sha256:ba0d021a166865d2265246961bec0152ff124de910c5cc39f1156ce3fa7c69dc'
+        --require-hashes -r "$cr_pip_pin"
     # CMake, and the grpcio-tools protoc that player/native/protoc-wrapper.py
     # runs for nanopb: exact versions, wheels only (no source builds, no
     # setup.py), each wheel hashed from PyPI against Python 3.8/aarch64 in

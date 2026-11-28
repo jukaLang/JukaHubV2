@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const profilesRAName = "retroachievements.json"
@@ -40,6 +41,13 @@ func profilesRAPath(dir string) string {
 	return filepath.Join(dir, profilesRAName)
 }
 
+// profilesRAMemo keeps the last read account for each profile: the settings
+// row asks on every frame, and the file changes only through profilesRASave.
+var profilesRAMemo struct {
+	mu    sync.Mutex
+	byDir map[string]profilesRALogin
+}
+
 // profilesRALoad reads and opens a profile's account. A missing, unreadable
 // or damaged file is no account: launches then play with achievements off,
 // as every profile's did before this file existed.
@@ -47,6 +55,24 @@ func profilesRALoad(dir string) profilesRALogin {
 	if strings.TrimSpace(dir) == "" {
 		return profilesRALogin{}
 	}
+	profilesRAMemo.mu.Lock()
+	acct, ok := profilesRAMemo.byDir[dir]
+	profilesRAMemo.mu.Unlock()
+	if ok {
+		return acct
+	}
+	acct = profilesRARead(dir)
+	profilesRAMemo.mu.Lock()
+	if profilesRAMemo.byDir == nil {
+		profilesRAMemo.byDir = map[string]profilesRALogin{}
+	}
+	profilesRAMemo.byDir[dir] = acct
+	profilesRAMemo.mu.Unlock()
+	return acct
+}
+
+// profilesRARead is profilesRALoad's file read.
+func profilesRARead(dir string) profilesRALogin {
 	var stored profilesRALogin
 	if _, err := readJSONWithBackup(profilesRAPath(dir), &stored); err != nil {
 		if !os.IsNotExist(err) {
@@ -88,7 +114,13 @@ func profilesRASave(dir, user, pass string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return AtomicWrite(profilesRAPath(dir), append(data, '\n'), 0o600)
+	if err := AtomicWrite(profilesRAPath(dir), append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	profilesRAMemo.mu.Lock()
+	delete(profilesRAMemo.byDir, dir)
+	profilesRAMemo.mu.Unlock()
+	return nil
 }
 
 // profilesRAValues are the one-launch achievement settings for dir's account.

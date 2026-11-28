@@ -139,7 +139,9 @@ Two tabs; **L1 / R1** (Tab) switch them, and the app reopens on the last one.
 
 ## Solitaire
 
-Klondike, with undo and a game you can leave and resume at any moment.
+Klondike and FreeCell, with undo and a game you can leave and resume at any
+moment. The game's **Start** menu has a **Game** row that switches between them;
+each keeps its own deal and its own statistics.
 
 - **Goal:** build the four foundations up by suit from ace to king. In the
   seven columns, build down in alternating colours; only a king goes into an
@@ -156,10 +158,18 @@ Klondike, with undo and a game you can leave and resume at any moment.
   of the other colour one rank lower are up. When the stock and the waste are
   empty and every card is face up, the game finishes itself (with auto-move
   off, press **X** *Finish*).
+- **FreeCell:** eight columns dealt 7/7/7/7/6/6/6/6 face up, four cells and
+  four foundations. Numbered deals are the published Microsoft ones, so a
+  deal number means the same cards here as elsewhere. Any card may fill an
+  empty column. A run can move only as many cards as the free cells and empty
+  columns allow: (cells + 1) × 2^empty columns, halved onto an empty column
+  the run itself fills. **Y** uses a free cell only when no foundation or
+  column will take the card. There is no stock to draw.
 - **Menu (Start, or M):** Resume, New game, Restart this deal, Draw 1 / Draw 3,
-  Auto-move on / off, Statistics, Quit. New game and Restart ask for a second
-  A while a game is in progress. Changing Draw applies at once if you have
-  not moved yet, otherwise from the next deal.
+  Auto-move on / off, Game, Statistics, Reset statistics, Quit. New game,
+  Restart, Game and Reset ask for a second A while a game is in progress.
+  Changing Draw applies at once if you have not moved yet, otherwise from the
+  next deal.
 - **Saved automatically:** the game, its undo history, the clock and your
   statistics are saved after every move and whenever you leave, in
   `solitaire.json` in JukaHub's data folder. Open Solitaire again and you are

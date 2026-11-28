@@ -24,10 +24,10 @@ func TestSolFreeCellNumberedDeals(t *testing.T) {
 		"AH TD 7S QD AC 6D 8H",
 		"AS KH TH QC 3H 9D 6S",
 		"8D 3D TC KD 5H 9S 3C",
-		"8S 7H 4D JS 4C QS 9C",
-		"9H 7C 6H 2C 2S 4S TS",
-		"2H 5D JC 6C JH QH JD",
-		"KS KC 4H",
+		"8S 7H 4D JS 4C QS",
+		"9C 9H 7C 6H 2C 2S",
+		"4S TS 2H 5D JC 6C",
+		"JH QH JD KS KC 4H",
 	}
 	for _, tc := range []struct {
 		seed int64
