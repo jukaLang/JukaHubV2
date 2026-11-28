@@ -906,7 +906,16 @@ func pkgBuildModel(in pkgModelInput) *pkgModel {
 		m.Items = append(m.Items, it)
 		m.ByKey[key] = it
 	}
-	sort.SliceStable(m.Items, func(i, j int) bool { return m.Items[i].lower < m.Items[j].lower })
+	// Alphabetical, but packages the registry lists only for other devices come
+	// last: the registry carries separate Smart Pro and Brick builds of the same
+	// game, and the build for this device should not sit among the other one's.
+	sort.SliceStable(m.Items, func(i, j int) bool {
+		a, b := m.Items[i], m.Items[j]
+		if otherA, otherB := a.DeviceFit < 0, b.DeviceFit < 0; otherA != otherB {
+			return otherB
+		}
+		return a.lower < b.lower
+	})
 
 	if in.AppUpdate != "" {
 		app := &pkgItem{
