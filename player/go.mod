@@ -13,8 +13,8 @@ require (
 	github.com/pkg/sftp v1.13.13
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/thesyncim/gopus v0.2.10
-	github.com/tidwall/gjson v1.20.6
+	github.com/thesyncim/gopus v0.2.11
+	github.com/tidwall/gjson v1.20.7
 	github.com/ulikunitz/xz v0.5.17
 	github.com/veandco/go-sdl2 v0.4.40
 	go.etcd.io/bbolt v1.5.0
