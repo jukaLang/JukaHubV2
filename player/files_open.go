@@ -179,4 +179,3 @@ func filesOpenWithSystem(path string) bool {
 	showToast("Opened "+filepath.Base(path)+" with Windows", ToastSuccess())
 	return true
 }
-

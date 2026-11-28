@@ -1912,4 +1912,3 @@ func mlibNextEpisode(m *mlibModel, g mlibGroup) int {
 	}
 	return g.items[0]
 }
-

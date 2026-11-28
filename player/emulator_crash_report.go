@@ -239,6 +239,7 @@ func emulatorCrashReports() []string {
 }
 
 // emulatorCrashSummary is the first lines of the newest report, for a toast
+// Tests call this seam directly; it is kept for their table cases.
 // or a bug report where the whole file would be too much.
 func emulatorCrashSummary(max int) string {
 	reports := emulatorCrashReports()

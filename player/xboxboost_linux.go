@@ -236,4 +236,3 @@ func xboxBoostWiFiOn(radios []string) {
 		}
 	}
 }
-

@@ -109,7 +109,7 @@ func (b *booter) spawn(path string, argv []string, opts spawnOpts) (int, <-chan 
 
 // watchSignals: every signal is caught (the Go runtime would end the program,
 // and with it process 1, on several of them), SIGINT and SIGHUP ignored as the
-// shell init's "trap '' INT HUP" (children keep them ignored, as they did).
+// shell init's "trap ” INT HUP" (children keep them ignored, as they did).
 func (b *booter) watchSignals() {
 	all := make(chan os.Signal, 64)
 	signal.Notify(all)

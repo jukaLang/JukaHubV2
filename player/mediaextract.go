@@ -390,4 +390,3 @@ func mediaExtractRun(ctx context.Context, config *Config, videoPath string, meta
 	}
 	return dest, nil
 }
-

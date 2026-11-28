@@ -534,4 +534,3 @@ func TestLatestReleasePageAndLimitNote(t *testing.T) {
 		t.Errorf("a 403 with lookups left got the note %q", note)
 	}
 }
-

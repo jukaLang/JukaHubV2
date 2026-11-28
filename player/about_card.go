@@ -601,4 +601,3 @@ func aboutParseCoreInfo(text string) (name, version string) {
 	}
 	return name, version
 }
-

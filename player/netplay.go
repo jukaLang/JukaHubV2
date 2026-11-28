@@ -652,4 +652,3 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	recordGameLaunch(plan.Session.Game)
 	return nil
 }
-

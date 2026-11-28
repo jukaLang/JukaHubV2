@@ -631,4 +631,3 @@ func pmPythonInstall(ctx context.Context, progress func(done, total int64), phas
 	logInfo("portmaster", "installed %s for PortMaster", asset.Name)
 	return nil
 }
-

@@ -488,3 +488,32 @@ func TestVideoNotifHold(t *testing.T) {
 		t.Errorf("long chat line not capped: %d runes", utf8.RuneCountInString(long))
 	}
 }
+
+// CJK runs break between characters, never leaving 、。」 at the start of a
+// line or 「 at the end of one (kinsoku).
+func TestWrapWordsMeasuredCJK(t *testing.T) {
+	m := notifTestMeasure(10)
+	text := "「こんにちは、世界。」テスト"
+	lines, cut := wrapWordsMeasured(text, 50, 0, m)
+	if cut {
+		t.Fatalf("unexpected cut: %q", lines)
+	}
+	if got := strings.Join(lines, ""); got != text {
+		t.Fatalf("pieces %q do not add up to %q", lines, text)
+	}
+	for _, l := range lines {
+		if l == "" {
+			continue
+		}
+		r := []rune(l)
+		if r[0] == '、' || r[0] == '。' || r[0] == '」' {
+			t.Errorf("line starts with forbidden punctuation: %q", l)
+		}
+		if r[len(r)-1] == '「' {
+			t.Errorf("line ends with forbidden open bracket: %q", l)
+		}
+		if m(l) > 50 {
+			t.Errorf("line %q is %d px, wider than 50", l, m(l))
+		}
+	}
+}

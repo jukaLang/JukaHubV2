@@ -271,4 +271,3 @@ func extAppLaunchWith(app extApp, exe string, env []string, args ...string) bool
 	}()
 	return true
 }
-

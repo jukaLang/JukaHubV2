@@ -804,4 +804,3 @@ func (s *castFBSource) runNative(ctx context.Context, f *os.File, geom castFBGeo
 		timer.Reset(castNativeWait(interval, time.Since(start)))
 	}
 }
-

@@ -393,4 +393,3 @@ func acExitText(cmd *exec.Cmd, err error) string {
 	}
 	return cmd.ProcessState.String()
 }
-

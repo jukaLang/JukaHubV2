@@ -994,4 +994,3 @@ func sttStreamWanted(config *Config, wake bool) bool {
 	}
 	return sttStreamChoice(sttModeOf(config), groqAPIKey(), IsOnline(), true, wake)
 }
-

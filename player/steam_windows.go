@@ -62,4 +62,3 @@ func steamOpenURI(uri string) error {
 	go func() { _ = cmd.Wait() }()
 	return nil
 }
-

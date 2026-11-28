@@ -241,6 +241,7 @@ func renderCastReceiver(renderer *sdl.Renderer, config *Config) {
 }
 
 // castReceiverReset clears the card, e.g. when the companion stops: a stale
+// Tests call this seam directly; it is kept for their table cases.
 // incoming file is never shown without a new POST.
 func castReceiverReset() {
 	castRecv.mu.Lock()

@@ -138,24 +138,24 @@ type padsPattern struct {
 
 // padsProject is everything Pads saves.
 type padsProject struct {
-	Version   int                         `json:"version"`
-	BPM       int                         `json:"bpm"`
-	Swing     float64                     `json:"swing"`
-	Master    float64                     `json:"master"`
-	Comp      float64                     `json:"compressor"`
-	DelayTime int                         `json:"delayTime"`
-	DelayFB   float64                     `json:"delayFeedback"`
-	RevSize   float64                     `json:"reverbSize"`
-	Current   int                         `json:"current"`
-	SongMode  bool                        `json:"songMode"`
-	Song      []int                       `json:"song,omitempty"`
-	RecLive   bool                        `json:"recordLive"`
-	Pads      [padsCount]padsPad          `json:"pads"`
-	Patterns  [padsPatterns]padsPattern   `json:"patterns"`
-	FX        [padsDirCount]int           `json:"stickFx"`
-	Latch     [padsFxCount]float64        `json:"latchFx"`
-	Chop      int                         `json:"chop"`
-	ChopMode  int                         `json:"chopMode"`
+	Version   int                       `json:"version"`
+	BPM       int                       `json:"bpm"`
+	Swing     float64                   `json:"swing"`
+	Master    float64                   `json:"master"`
+	Comp      float64                   `json:"compressor"`
+	DelayTime int                       `json:"delayTime"`
+	DelayFB   float64                   `json:"delayFeedback"`
+	RevSize   float64                   `json:"reverbSize"`
+	Current   int                       `json:"current"`
+	SongMode  bool                      `json:"songMode"`
+	Song      []int                     `json:"song,omitempty"`
+	RecLive   bool                      `json:"recordLive"`
+	Pads      [padsCount]padsPad        `json:"pads"`
+	Patterns  [padsPatterns]padsPattern `json:"patterns"`
+	FX        [padsDirCount]int         `json:"stickFx"`
+	Latch     [padsFxCount]float64      `json:"latchFx"`
+	Chop      int                       `json:"chop"`
+	ChopMode  int                       `json:"chopMode"`
 }
 
 const padsProjectVersion = 1

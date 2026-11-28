@@ -7,6 +7,10 @@ package main
 //   - Passive mode only (PASV/EPSV). The active PORT/EPRT commands are refused,
 //     which also removes the FTP bounce class of attacks, and a passive data
 //     connection is accepted only from the address of its control connection.
+//   - Explicit TLS (FTPS, RFC 4217): AUTH TLS upgrades the control connection
+//     before sign-in, and PROT P puts the data connections behind TLS too, all
+//     with one self-signed certificate kept in the app data folder (ftp_tls.go).
+//     Plain FTP stays for clients that do not ask for TLS.
 //   - Sign-in is the account "juka" with a password generated on every start
 //     (generateSSHPassword), shown on the Network tools page only and compared
 //     through the salted digest in constant time. A wrong password waits two
@@ -31,6 +35,7 @@ package main
 import (
 	"bufio"
 	"crypto/subtle"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -109,6 +114,10 @@ type ftpService struct {
 	activity  fsActivity
 	limiter   ftpLoginLimiter
 	loginWait time.Duration
+	// tlsConf is nil when this device has no usable certificate; AUTH TLS
+	// then answers 431 rather than breaking plain FTP.
+	tlsConf        *tls.Config
+	tlsFingerprint string
 }
 
 var ftpSrv = &ftpService{conns: make(map[net.Conn]struct{})}
@@ -218,6 +227,18 @@ func (s *ftpService) Port() int {
 }
 
 // LastError returns the most recent start error, if any.
+// TLSCertFingerprint is the SHA-256 the sheet shows for FTPS clients to
+// check. Empty when the device has no usable certificate.
+func (s *ftpService) TLSCertFingerprint() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tlsFingerprint
+}
+
+// LastError returns the most recent start error, if any.
 func (s *ftpService) LastError() string {
 	if s == nil {
 		return ""
@@ -291,6 +312,16 @@ func (s *ftpService) startShares(base string, shares []ftpShare, addr string) er
 		set.close()
 		return fmt.Errorf("generate FTP password: %w", err)
 	}
+	// FTPS is a bonus: a device that cannot store a certificate still serves
+	// plain FTP, and AUTH TLS says so.
+	var tlsConf *tls.Config
+	tlsFingerprint := ""
+	if cert, fp, certErr := ftpLoadOrCreateCert(ftpCertPath()); certErr != nil {
+		logWarn("ftp", "FTPS is off: %v", certErr)
+	} else {
+		tlsConf = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+		tlsFingerprint = fp
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		set.close()
@@ -321,6 +352,8 @@ func (s *ftpService) startShares(base string, shares []ftpShare, addr string) er
 	s.lastErr = ""
 	s.gen++
 	s.netBase = netBase
+	s.tlsConf = tlsConf
+	s.tlsFingerprint = tlsFingerprint
 	if tcp, ok := ln.Addr().(*net.TCPAddr); ok {
 		s.port = tcp.Port
 	}
@@ -1001,6 +1034,13 @@ type ftpSession struct {
 	dataLn net.Listener
 	rest   int64
 	rnfr   *ftpPath
+
+	// tlsConf is this run's certificate (nil when FTPS is unavailable).
+	// tlsOn marks a control connection that has completed AUTH TLS, and
+	// protP puts data connections behind TLS too (PROT P).
+	tlsConf *tls.Config
+	tlsOn   bool
+	protP   bool
 }
 
 func serveFTPSession(conn net.Conn, srv *ftpService, set *ftpShareSet) {
@@ -1013,6 +1053,9 @@ func serveFTPSession(conn net.Conn, srv *ftpService, set *ftpShareSet) {
 		remoteIP: ftpRemoteIP(conn),
 	}
 	if srv != nil {
+		srv.mu.Lock()
+		sess.tlsConf = srv.tlsConf
+		srv.mu.Unlock()
 		sess.clientID = srv.clients.add(conn.RemoteAddr().String())
 		defer srv.clients.remove(sess.clientID)
 	}
@@ -1172,6 +1215,22 @@ func (s *ftpSession) openData() (net.Conn, error) {
 			return nil, err
 		}
 		if s.remoteIP == "" || ftpRemoteIP(conn) == s.remoteIP {
+			if s.protP {
+				if s.tlsConf == nil {
+					_ = conn.Close()
+					return nil, errors.New("TLS is not available on this device")
+				}
+				// The server is the TLS server on data connections too, in
+				// both the passive and (unsupported) active cases.
+				tlsConn := tls.Server(conn, s.tlsConf)
+				_ = tlsConn.SetDeadline(time.Now().Add(ftpAcceptWait))
+				if err := tlsConn.Handshake(); err != nil {
+					_ = conn.Close()
+					return nil, fmt.Errorf("TLS data handshake: %w", err)
+				}
+				_ = tlsConn.SetDeadline(time.Time{})
+				conn = tlsConn
+			}
 			if !s.trackData(conn) {
 				return nil, errors.New("the server is stopping")
 			}
@@ -1293,9 +1352,38 @@ func (s *ftpSession) handle(cmd, arg string) bool {
 		s.reply("200 OK")
 	case "SYST":
 		s.reply("215 UNIX Type: L8")
+	case "AUTH":
+		return s.authTLS(arg)
+	case "PBSZ":
+		if !s.tlsOn {
+			s.reply("503 AUTH TLS first")
+			break
+		}
+		s.reply("200 PBSZ=0")
+	case "PROT":
+		if !s.tlsOn {
+			s.reply("503 AUTH TLS first")
+			break
+		}
+		switch strings.ToUpper(strings.TrimSpace(arg)) {
+		case "P":
+			s.protP = true
+			s.reply("200 Protection level set to Private")
+		case "C":
+			s.protP = false
+			s.reply("200 Protection level set to Clear")
+		case "S", "E":
+			s.reply("536 Only Private (P) or Clear (C) protection is supported")
+		default:
+			s.reply("501 PROT needs P or C")
+		}
 	case "FEAT":
 		s.reply("211-Features")
-		_, _ = io.WriteString(s.conn, " EPSV\r\n PASV\r\n SIZE\r\n MDTM\r\n REST STREAM\r\n UTF8\r\n211 End\r\n")
+		feats := " EPSV\r\n PASV\r\n SIZE\r\n MDTM\r\n REST STREAM\r\n UTF8\r\n"
+		if s.tlsConf != nil {
+			feats += " AUTH TLS\r\n PBSZ\r\n PROT\r\n"
+		}
+		_, _ = io.WriteString(s.conn, feats+"211 End\r\n")
 	case "OPTS":
 		s.reply("200 UTF8 enabled")
 	case "TYPE":

@@ -295,4 +295,3 @@ func x1InstallPort() {
 	scene := currentSceneIndex
 	goInstall(goBuildXHome, func() bool { return currentSceneIndex == scene }, func(portsInstallResult) { x1InvalidateScan() })
 }
-

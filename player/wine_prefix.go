@@ -980,4 +980,3 @@ func wineWaitArgs(server []string, command string, args []string) []string {
 	out = append(out, "-c", script, "jukahub-wine", command)
 	return append(out, args...)
 }
-

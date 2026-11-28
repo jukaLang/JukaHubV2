@@ -123,6 +123,7 @@ func closeDownloadsPanel() {
 
 // downloadRowsFor builds the visible rows for a tab, with one heading per
 // non-empty section. The "Add a link" row always comes first so a fresh install
+// Tests call this seam directly; it is kept for their table cases.
 // has an obvious next step.
 func downloadRowsFor(tab downloadTab) []downloadRow {
 	return downloadRowsForItems(tab, downloadPanelItems())

@@ -1377,4 +1377,3 @@ func (c *vpndClock) finish() {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
-

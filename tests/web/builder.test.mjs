@@ -2,6 +2,7 @@
 // index.html and scripts inside jsdom with network access blocked.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +54,9 @@ before(async () => {
     pretendToBeVisual: true,
     virtualConsole,
     beforeParse(window) {
+      // The live builder signs its requests with WebCrypto; jsdom has no
+      // subtle crypto, so give it Node's implementation.
+      Object.defineProperty(window, 'crypto', { value: webcrypto, configurable: true });
       window.localStorage.setItem('jukahub-ai-key', 'old-test-key');
       window.localStorage.setItem('jukahub-ai-provider', 'openai');
       window.matchMedia ||= () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
@@ -1076,7 +1080,10 @@ test('the live builder sends the code as a header and reports a held design as w
     const post = calls.find(c => c.options.method === 'POST');
     assert.ok(post, 'the design was posted');
     assert.equal(post.url, 'http://192.168.1.50:8422/api/design');
-    assert.equal(post.options.headers['X-Live-Builder-Code'], '123456');
+    // The code is the HMAC key, never a header: a capture cannot replay it.
+    assert.ok(post.options.headers['X-Live-Builder-Signature'], 'the request is signed');
+    assert.ok(post.options.headers['X-Live-Builder-Nonce'], 'the request has a nonce');
+    assert.equal(post.options.headers['X-Live-Builder-Code'], undefined);
     assert.ok(calls.every(c => !/[?&]code=/.test(c.url)), 'the code never travels in the URL');
     assert.match(doc.getElementById('deviceStateText').textContent, /Waiting for approval/);
     assert.match(doc.getElementById('deviceMeta').textContent, /runs the program/);
@@ -1130,7 +1137,7 @@ test('a link can suggest a device address but never receives the saved pairing c
     assert.equal(await live.connect({ silent: true }), true);
     const toLink = calls.filter(c => c.url.includes('//attacker.example:8422/'));
     assert.ok(toLink.length > 0, 'Connect used the address in the field');
-    assert.ok(calls.every(c => !(c.options.headers || {})['X-Live-Builder-Code']), 'the saved code was not sent');
+    assert.ok(calls.every(c => !(c.options.headers || {})['X-Live-Builder-Signature']), 'the saved code was not used');
     assert.equal(live.getState().code, '');
     assert.equal(doc.getElementById('deviceCode').value, '');
     live.closePanel();
@@ -1171,7 +1178,7 @@ test('a pairing code stays with the address it was saved for, even past an inval
     doc.getElementById('deviceUrl').value = '192.168.1.99:8422';
     assert.equal(await live.connect({ silent: true }), true);
     assert.ok(calls.some(c => c.url.includes('//192.168.1.99:8422/')), 'Connect used the new address');
-    assert.ok(calls.every(c => !(c.options.headers || {})['X-Live-Builder-Code']), 'the code was not sent to the other device');
+    assert.ok(calls.every(c => !(c.options.headers || {})['X-Live-Builder-Signature']), 'the code was not used for the other device');
     assert.equal(live.getState().code, '');
     assert.equal(doc.getElementById('deviceCode').value, '');
 
@@ -1179,7 +1186,8 @@ test('a pairing code stays with the address it was saved for, even past an inval
     doc.getElementById('deviceCode').value = '654321';
     calls.length = 0;
     assert.equal(await live.connect({ silent: true }), true);
-    assert.equal(calls[0].options.headers['X-Live-Builder-Code'], '654321');
+    assert.ok(calls[0].options.headers['X-Live-Builder-Signature'], 'the newly typed code signed the request');
+    assert.equal(calls[0].options.headers['X-Live-Builder-Code'], undefined);
     assert.equal(live.getState().codeUrl, 'http://192.168.1.99:8422');
     const saved = JSON.parse(window.localStorage.getItem('jukahub-live-device'));
     assert.equal(saved.code, '654321');

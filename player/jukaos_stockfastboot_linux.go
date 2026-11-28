@@ -43,4 +43,3 @@ func jukaosStockFastBootSwitch(on bool) error {
 	}
 	return nil
 }
-

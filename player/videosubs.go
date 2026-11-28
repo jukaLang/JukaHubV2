@@ -1340,4 +1340,3 @@ func subtitleStatusLine() string {
 	}
 	return "Subtitles: " + state + " (" + videoSubs.status + ")"
 }
-

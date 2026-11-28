@@ -1062,4 +1062,3 @@ func toolboxSummaryValue() string {
 	}
 	return fmt.Sprintf("%d of %d installed", n, len(toolboxCatalog()))
 }
-

@@ -264,4 +264,3 @@ func apkStoreWaydroidInstall(ctx context.Context, host apkStoreWaydroidHost, bin
 	}
 	return apkWaydroidHandedOver, nil
 }
-

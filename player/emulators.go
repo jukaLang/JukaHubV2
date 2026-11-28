@@ -1971,4 +1971,3 @@ func emuSummary(entries []emuEntry) string {
 	}
 	return strings.Join(parts, " · ")
 }
-

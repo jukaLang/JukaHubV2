@@ -3070,4 +3070,3 @@ func browserPreview(ctx context.Context, html string, pageURL *url.URL, truncate
 		<-fontsDone
 	}()
 }
-

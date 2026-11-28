@@ -1643,4 +1643,3 @@ func syncthingPowerStatus() string {
 	b.WriteString("\nSet it up in Save Manager → Syncthing.")
 	return b.String()
 }
-

@@ -53,4 +53,3 @@ func runExplicitExternalApp(path string) error {
 	logDebug("external", "finished: %s", command)
 	return nil
 }
-

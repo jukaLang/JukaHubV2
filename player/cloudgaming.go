@@ -895,4 +895,3 @@ func cgOpenSwitchSheet(config *Config, target goBuild) {
 func cgInstallChecked(_ *Config, build goBuild) {
 	goInstall(build, cgScreenUp, cgAfterInstall)
 }
-

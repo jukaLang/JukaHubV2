@@ -36,7 +36,3 @@ func alarmSignalChild(cmd *exec.Cmd, stop bool) error {
 // alarmCanPauseChildren reports whether a running game can be paused under the
 // alarm on this platform.
 func alarmCanPauseChildren() bool { return true }
-
-
-
-

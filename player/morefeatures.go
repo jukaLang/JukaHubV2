@@ -1224,4 +1224,3 @@ func renderTickerBoard(renderer *sdl.Renderer, config *Config, element Element, 
 		}
 	}
 }
-

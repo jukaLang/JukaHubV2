@@ -791,4 +791,3 @@ func mediaRelayRewriteRef(ref string, base *url.URL, route func(string) string) 
 	}
 	return ref
 }
-

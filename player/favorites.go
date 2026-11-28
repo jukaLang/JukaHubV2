@@ -1664,4 +1664,3 @@ func openInExplorer(path string) {
 	// Linux until JukaHub exits.
 	go func() { _ = cmd.Wait() }()
 }
-

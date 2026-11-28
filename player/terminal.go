@@ -1821,4 +1821,3 @@ func (terminalScene) handleController(e *sdl.ControllerButtonEvent, c *Config) b
 }
 
 func init() { registerScene(terminalScene{sceneBase{name: "Terminal"}}) }
-

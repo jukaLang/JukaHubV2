@@ -663,4 +663,3 @@ func toolsHTTPCheckSubmit(raw string) {
 		return powerAsyncResult{text: text, err: err}
 	})
 }
-

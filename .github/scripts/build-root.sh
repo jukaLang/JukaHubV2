@@ -124,6 +124,7 @@ create() {
     # Naming the keyring makes an unsigned or wrongly signed archive fatal;
     # without it debootstrap only warns and carries on.
     quietly debootstrap sudo debootstrap --variant=minbase --arch=arm64 \
+        --include=ca-certificates \
         --keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg \
         focal "$ROOTFS" "$MIRROR"
     # The root lives for one job. dpkg need not sync every file it unpacks to

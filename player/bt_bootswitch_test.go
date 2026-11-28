@@ -17,8 +17,8 @@ func TestBTSwitchStillOffUsesStoredChoice(t *testing.T) {
 	defer func() { btSwitchPath = oldPath }()
 
 	st := &btSwitchState
-	oldState := *st
-	defer func() { *st = oldState }()
+	oldKnown, oldOn, oldLatch := st.known, st.on, st.onThisSession
+	defer func() { st.known, st.on, st.onThisSession = oldKnown, oldOn, oldLatch }()
 	st.known, st.on, st.onThisSession = false, false, false
 
 	write := func(on bool) {
@@ -61,8 +61,8 @@ func TestBTSwitchStillOffUsesStoredChoice(t *testing.T) {
 // would skip its checks for the rest of the run.
 func TestBTSwitchOffClearsSessionLatch(t *testing.T) {
 	st := &btSwitchState
-	oldState := *st
-	defer func() { *st = oldState }()
+	oldKnown, oldOn, oldLatch := st.known, st.on, st.onThisSession
+	defer func() { st.known, st.on, st.onThisSession = oldKnown, oldOn, oldLatch }()
 	st.known, st.on, st.onThisSession = true, true, true
 
 	if btSwitchNote(true) {

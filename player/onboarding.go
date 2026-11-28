@@ -1322,4 +1322,3 @@ func ensureOnboardingEntry(config *Config) {
 		BgColor: "$buttonColor",
 	})
 }
-

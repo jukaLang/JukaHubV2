@@ -275,9 +275,11 @@ func jukaosSettingsRows(*Config) []setRow {
 				}
 				return "At power-on the firmware starts JukaHub OS in place of its menu, so " + fw + "'s menu never shows. Off: the menu opens for a moment and is closed (try this if Wi-Fi, brightness or volume are not set up after a boot)"
 			},
-			Disabled: func(c *Config) bool { return !jukaosUI.state.Enabled || !autoStartEnabled(c) || !autoStartSkipMenuOn(c) },
-			Get:      func(*Config) bool { return jukaosUI.state.jukaosFastBootOn() },
-			Set:      func(_ *Config, on bool) { jukaosSetFastBoot(on) },
+			Disabled: func(c *Config) bool {
+				return !jukaosUI.state.Enabled || !autoStartEnabled(c) || !autoStartSkipMenuOn(c)
+			},
+			Get: func(*Config) bool { return jukaosUI.state.jukaosFastBootOn() },
+			Set: func(_ *Config, on bool) { jukaosSetFastBoot(on) },
 		},
 	}
 	if summary := startupBootSummary(); summary != "" {

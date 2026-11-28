@@ -153,6 +153,7 @@ func setSectionRows(c *Config, s setSection) []setRow {
 	}
 	return s.Rows
 }
+
 // ── Small helpers ─────────────────────────────────────────────────────────
 
 func setStatic(text string) func(*Config) string {

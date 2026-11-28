@@ -140,16 +140,40 @@ func fitRunesMeasured(prefix string, runes []rune, maxW int32, measure func(stri
 // preferTokenCut moves a cut inside an over-long token back to just after a
 // separator when one sits in the back half of the piece: "/storage/roms/psp/"
 // then "Castlevania.iso" reads far better than ".../Castlev" then "ania.iso".
-// Path separators win over the URL and file-name punctuation.
+// Path separators win over the URL and file-name punctuation. CJK runs also
+// honour kinsoku: no break before 、。」 and no break after 「.
 func preferTokenCut(runes []rune, n int) int {
 	for _, seps := range []string{`/\`, "-_.?&=,;:"} {
 		for i := n - 1; i >= n/2 && i > 0; i-- {
 			if strings.ContainsRune(seps, runes[i]) {
-				return i + 1
+				cut := i + 1
+				if cjkBreakLegal(runes, cut) {
+					return cut
+				}
 			}
 		}
 	}
-	return n
+	p := n
+	for p > 1 && !cjkBreakLegal(runes, p) {
+		p--
+	}
+	if p < 1 {
+		p = 1
+	}
+	return p
+}
+
+// cjkBreakLegal reports whether cutting runes at cut (left piece runes[:cut],
+// right piece runes[cut:]) violates the CJK line-break rules: the right piece
+// may not start with 、。」 and the left piece may not end with 「.
+func cjkBreakLegal(runes []rune, cut int) bool {
+	if cut > 0 && cut-1 < len(runes) && runes[cut-1] == '「' {
+		return false
+	}
+	if cut < len(runes) && (runes[cut] == '、' || runes[cut] == '。' || runes[cut] == '」') {
+		return false
+	}
+	return true
 }
 
 // fitEllipsisMeasured ends line with an ellipsis, trimming it from the end until

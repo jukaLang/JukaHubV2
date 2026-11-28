@@ -1451,4 +1451,3 @@ func tailscaledStepSystem(w *tailscaledWorkerState) {
 		s.Detail = ""
 	})
 }
-

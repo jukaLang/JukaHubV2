@@ -767,4 +767,3 @@ func videoTracksAudioChoice(path string) int {
 	}
 	return 0
 }
-

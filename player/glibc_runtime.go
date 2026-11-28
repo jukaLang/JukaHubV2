@@ -1227,4 +1227,3 @@ func privateGlibcRefreshAsync() {
 		privateRuntimeMarkChecked()
 	}()
 }
-

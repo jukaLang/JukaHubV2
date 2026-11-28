@@ -22,10 +22,10 @@ func emuResumeOffset(partSize, maxBytes int64) int64 {
 type emuRangeAction uint8
 
 const (
-	emuRangeFail emuRangeAction = iota // an unexpected status: do not write
-	emuRangeRestart                    // 200: the server ignored Range, restart
-	emuRangeAppend                     // 206: append to the .part
-	emuRangeDropRetry                  // 416: the part is stale, drop it and retry
+	emuRangeFail      emuRangeAction = iota // an unexpected status: do not write
+	emuRangeRestart                         // 200: the server ignored Range, restart
+	emuRangeAppend                          // 206: append to the .part
+	emuRangeDropRetry                       // 416: the part is stale, drop it and retry
 )
 
 func emuRangeActionFor(status int, offset int64) emuRangeAction {

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -34,8 +35,11 @@ func TestPkgPublishApps(t *testing.T) {
 		t.Fatalf("published %v, want DNSChanger and One", got)
 	}
 	st, err := os.Stat(filepath.Join(apps, "DNSChanger", "launch.sh"))
-	if err != nil || st.Mode().Perm()&0o100 == 0 {
-		t.Fatalf("launch.sh missing or not executable: %v %v", st, err)
+	if err != nil {
+		t.Fatalf("launch.sh missing: %v", err)
+	}
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("launch.sh is not executable: %v", st)
 	}
 	if _, err := os.Stat(filepath.Join(apps, "Two", pkgAppMarker)); err == nil {
 		t.Fatal("replaced a folder this package does not own")

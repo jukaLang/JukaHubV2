@@ -120,4 +120,3 @@ func mcDesktopApps() []mcDesktopApp {
 	}
 	return apps
 }
-

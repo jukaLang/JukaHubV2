@@ -389,4 +389,3 @@ func recoverySpawn(self string, args []string, wd string) {
 	}
 	_ = cmd.Process.Release()
 }
-

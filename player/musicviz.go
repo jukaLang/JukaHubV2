@@ -339,7 +339,7 @@ func vizAnalyse() {
 		}
 		rms := math.Sqrt(sum / float64(len(src)))
 		vuDB := 20*math.Log10(rms+1e-9) + 18 // dB relative to 0 VU
-		target := (vuDB + 20) / 23            // -20 VU .. +3 VU
+		target := (vuDB + 20) / 23           // -20 VU .. +3 VU
 		target = math.Max(0, math.Min(1, target))
 		viz.vu[c] += (target - viz.vu[c]) * (1 - math.Exp(-dt/0.3))
 		pkDB := 20 * math.Log10(pk+1e-9)

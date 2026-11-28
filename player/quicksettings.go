@@ -278,7 +278,7 @@ func qsRefreshAvailability() {
 		qsActionNetplay:       true,
 		qsActionMagnifier:     true,
 		qsActionBgMusic:       true,
-		qsActionScreenRec:     true, // only added where it works (screenRecQSToggles)
+		qsActionScreenRec:     true,                                        // only added where it works (screenRecQSToggles)
 		qsActionVPN:           vpnQSAvailable() || vpnEnabledIn(appConfig), // on can always go off
 	}
 	detail := map[qsAction]string{

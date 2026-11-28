@@ -314,4 +314,3 @@ func wineRunTool(log wineLog, limit time.Duration, name string, args ...string) 
 	}
 	return err
 }
-

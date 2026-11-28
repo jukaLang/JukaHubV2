@@ -43,4 +43,3 @@ func TestDetectDeviceBeforeInitLogging(t *testing.T) {
 		t.Fatalf("device detection before logging: %v\n%s", err, out)
 	}
 }
-

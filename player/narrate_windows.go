@@ -200,4 +200,3 @@ func narrSAPIWatch() {
 		narrSAPI.mu.Unlock()
 	}
 }
-

@@ -1083,4 +1083,3 @@ func init() {
 		Install: wineUpdateInstall,
 	})
 }
-

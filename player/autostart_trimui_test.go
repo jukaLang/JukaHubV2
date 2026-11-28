@@ -495,4 +495,3 @@ func TestLastLogLine(t *testing.T) {
 		t.Fatalf("a line cut by the tail gave %q", got)
 	}
 }
-

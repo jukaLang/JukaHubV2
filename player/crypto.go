@@ -151,8 +151,14 @@ var cryptoKey = func() []byte {
 //
 // Custom key material (JUKAHUB_CRYPTO_KEY / JUKAHUB_CRYPTO_SALT) is never
 // guessed: those values can only come from the user who set them.
-//
+func legacyDecryptionKeys() [][]byte {
+	if os.Getenv("JUKAHUB_CRYPTO_KEY") != "" || os.Getenv("JUKAHUB_CRYPTO_SALT") != "" {
+		return nil
+	}
+	return [][]byte{deriveKeyFromSecret([]byte(defaultSecretText), []byte(defaultSaltText))}
+}
 
+//
 
 // getCryptoKey returns the player's encryption key.
 func getCryptoKey() []byte {
@@ -265,6 +271,11 @@ func decryptData(data []byte) ([]byte, error) {
 	plaintext, currentErr := decryptAESGCM(getCryptoKey(), data)
 	if currentErr == nil {
 		return plaintext, nil
+	}
+	for _, key := range legacyDecryptionKeys() {
+		if old, err := decryptAESGCM(key, data); err == nil {
+			return old, nil
+		}
 	}
 	return nil, currentErr
 }

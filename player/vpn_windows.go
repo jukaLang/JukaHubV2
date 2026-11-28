@@ -581,4 +581,3 @@ func vpnWinAdminDir(dir string, sd *windows.SECURITY_DESCRIPTOR) error {
 	return windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
-

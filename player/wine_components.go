@@ -304,6 +304,7 @@ func wineComponentsMissing() []wineComponent {
 }
 
 // wineComponentFetch downloads one component and verifies its SHA-256. A bad
+// Tests call this seam directly; it is kept for their table cases.
 // digest leaves no cached file: downloadToFile removes the partial on failure.
 func wineComponentFetch(ctx context.Context, c wineComponent) error {
 	return wineComponentFetchWithReport(ctx, c, nil)
@@ -624,6 +625,7 @@ func wineComponentRemove(c wineComponent) error {
 }
 
 // wineComponentsCachedBytes is how much space the cached components use, so
+// Tests call this seam directly; it is kept for their table cases.
 // the card can say what removing one would free on a small card.
 func wineComponentsCachedBytes() int64 {
 	list, err := wineLoadComponents()

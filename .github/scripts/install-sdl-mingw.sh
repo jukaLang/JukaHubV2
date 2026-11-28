@@ -45,6 +45,27 @@ verify() {
   fi
 }
 
+# Git Bash on some Windows machines has neither curl nor wget on PATH even
+# though curl.exe sits in System32. Try each in turn and fail loudly if none
+# can fetch: skipping verification is worse than stopping the install.
+fetch_archive() {
+  out=$1
+  url=$2
+  for tool in curl curl.exe /c/Windows/System32/curl.exe; do
+    if command -v "$tool" >/dev/null 2>&1 || [ -x "$tool" ]; then
+      "$tool" -fsSL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 90 \
+        -o "$out" "$url"
+      return
+    fi
+  done
+  if command -v wget >/dev/null 2>&1; then
+    wget -q -O "$out" "$url"
+    return
+  fi
+  echo "no downloader found (curl or wget)" >&2
+  return 1
+}
+
 archives() {
   if [ -n "${SDL_MINGW_ARCHIVES:-}" ]; then
     cat "$SDL_MINGW_ARCHIVES"
@@ -70,8 +91,7 @@ while read -r file digest url; do
   echo "fetching $file"
   files+=("$file")
   digests+=("$digest")
-  curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 90 \
-    -o "$file" "$url" &
+  fetch_archive "$file" "$url" &
   pids+=("$!")
 done < <(archives)
 

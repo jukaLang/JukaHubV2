@@ -259,4 +259,3 @@ func TestStagedUpdateUnzipsAndReplacesTheInstallation(t *testing.T) {
 		t.Error("journal must be removed after a successful swap")
 	}
 }
-

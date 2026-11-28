@@ -166,4 +166,3 @@ func emuCoreRowActivate(e emuEntry) {
 	setGameLibraryQuery(query)
 	ShowToast(query+" games · "+e.Name+" runs them in RetroArch", ToastKindInfo)
 }
-

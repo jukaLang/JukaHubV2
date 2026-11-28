@@ -477,4 +477,3 @@ func sttLocalArgs(model, lang, prompt string, quick bool) []string {
 	}
 	return args
 }
-

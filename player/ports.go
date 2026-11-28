@@ -1343,4 +1343,3 @@ func portsRowNameWidth(rowW, badgeW, statusW int32) int32 {
 	}
 	return w
 }
-

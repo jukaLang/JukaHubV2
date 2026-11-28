@@ -456,4 +456,3 @@ func psProbeHelperExec(path string, env []string) psHelperProbeResult {
 	}
 	return res
 }
-

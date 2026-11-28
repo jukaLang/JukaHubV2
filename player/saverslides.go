@@ -1033,4 +1033,3 @@ func saverVideoDraw(renderer *sdl.Renderer, config *Config, tick uint64) bool {
 	}
 	return true
 }
-

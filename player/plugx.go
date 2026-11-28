@@ -504,6 +504,7 @@ func plugxVideoHosts() []plugxVideoHost {
 	return append([]plugxVideoHost(nil), plugxRegistry.videoHosts...)
 }
 
+// Tests call this seam directly; it is kept for their table cases.
 // plugxVideoHostSummary is the string a settings row can show.
 func plugxVideoHostSummary() string {
 	list := plugxVideoHosts()

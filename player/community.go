@@ -1179,4 +1179,3 @@ func renderCommunityDiagnosticsQR(renderer *sdl.Renderer, config *Config, font, 
 	renderText(renderer, config, medium, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)
 }
-

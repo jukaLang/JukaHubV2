@@ -698,4 +698,3 @@ func javaRunWhenReady(rt javaRuntime, then func(rt javaRuntime)) {
 	}
 	then(rt)
 }
-

@@ -916,4 +916,3 @@ func usbNetNoteNoRoom(gadget string, own bool) {
 	}
 	usbNetSetUnavailable(usbNetNoRoomReason(own))
 }
-

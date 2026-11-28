@@ -1060,4 +1060,3 @@ func drawHomeAudioGraph(renderer *sdl.Renderer, rect sdl.Rect, bars *[homeWaveBa
 		fillRoundedRect(renderer, x, mid-bh/2, barW, bh, barW/2, color)
 	}
 }
-

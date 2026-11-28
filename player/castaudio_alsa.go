@@ -600,4 +600,3 @@ func castAudioChildEnv(cmd *exec.Cmd, env []string) []string {
 	logInfo("cast", "this program's sound also goes to Screen Share (%s)", path)
 	return env
 }
-

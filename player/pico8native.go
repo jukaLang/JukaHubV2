@@ -957,4 +957,3 @@ func pico8SameCart(src, dst string) bool {
 func pico8CartInFolder(system, name string) bool {
 	return system == pico8SystemName && strings.HasSuffix(strings.ToLower(name), ".p8.png")
 }
-

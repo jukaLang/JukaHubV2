@@ -440,4 +440,3 @@ func idleHookRunOne(dir, name, state, where, source string) {
 		logInfo("idle", "hook %s/%s (%s) ran in %s %s", state, name, where, took, first)
 	}
 }
-

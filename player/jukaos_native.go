@@ -320,4 +320,3 @@ func jukaosNativeService(script, verb string) error {
 	logInfo("jukaos", "%s %s", script, verb)
 	return nil
 }
-

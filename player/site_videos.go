@@ -707,4 +707,3 @@ func siteVideosLines(cursor int) []string {
 		"A plays the highlighted video · Y searches this site · X pastes a link")
 	return lines
 }
-

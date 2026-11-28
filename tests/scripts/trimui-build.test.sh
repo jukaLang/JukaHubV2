@@ -85,6 +85,18 @@ EOF
 }
 for f in good loader nosdl; do as_aarch64 "$work/elf/$f"; done
 
+# Some host toolchains (notably a MinGW gcc used from Git Bash) link binaries
+# with no GLIBC_* version entries at all. The check under test is about those
+# entries, so a host that cannot produce them cannot exercise it: skip outside
+# CI instead of reporting a false "good binary was refused".
+if ! readelf -V "$work/elf/good" | grep -q 'GLIBC_'; then
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    fail "the CI toolchain produced no GLIBC_* symbol versions for the check fixture"
+  fi
+  echo "trimui-build: skipped (host gcc emits no glibc symbol versions)"
+  exit 0
+fi
+
 check() { # <scenario> <binary> [env...]
   local scenario=$1 bin=$2
   shift 2

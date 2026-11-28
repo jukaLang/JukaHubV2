@@ -893,4 +893,3 @@ func ytdlpSweepStale(dir, base string, now time.Time) {
 		}
 	}
 }
-

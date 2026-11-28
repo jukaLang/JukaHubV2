@@ -65,7 +65,9 @@ type calcKey struct {
 
 func calcDigit(d string) calcKey { return calcKey{label: d, insert: d, kind: calcKindDigit} }
 
-func calcOp(glyph string) calcKey { return calcKey{label: glyph, insert: glyph, kind: calcKindOperator} }
+func calcOp(glyph string) calcKey {
+	return calcKey{label: glyph, insert: glyph, kind: calcKindOperator}
+}
 
 var calcKeys = [calcRows][calcCols]calcKey{
 	{

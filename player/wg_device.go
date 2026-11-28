@@ -430,6 +430,7 @@ func wgPadding(n, mtu int) int {
 }
 
 // sealData frames pkt as a transport message for kp with the given counter,
+// Tests call this seam directly; it is kept for their table cases.
 // encrypting it in place inside buf (grown when too small).
 func sealData(kp *wgKeypair, counter uint64, pkt []byte, mtu int, buf []byte) []byte {
 	return sealDataAWG(kp, counter, pkt, mtu, buf, nil)

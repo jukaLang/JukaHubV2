@@ -116,7 +116,9 @@ func jfAuthHeader(token string) string {
 	return h
 }
 
-func jfQuote(s string) string { return strings.NewReplacer(`"`, "", "\\", "", "\n", " ", "\r", " ").Replace(s) }
+func jfQuote(s string) string {
+	return strings.NewReplacer(`"`, "", "\\", "", "\n", " ", "\r", " ").Replace(s)
+}
 
 // deviceModelName is a short name for the handheld in Jellyfin's sessions.
 func deviceModelName() string {

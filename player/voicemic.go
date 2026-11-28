@@ -1233,4 +1233,3 @@ func micMixerLevelWanted(name string) bool {
 	}
 	return strings.Contains(n, "mic") || strings.HasPrefix(n, "adc")
 }
-

@@ -380,4 +380,3 @@ func termJavaRemove(cmdline string) {
 		return nil
 	})
 }
-

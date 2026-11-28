@@ -2108,4 +2108,3 @@ func bzRefreshToolCache() bool {
 	bzToolCache.mu.Unlock()
 	return ok
 }
-

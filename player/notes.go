@@ -158,6 +158,7 @@ func notesLoad() {
 	notes.store = store
 }
 
+// Tests call this seam directly; it is kept for their table cases.
 // notesSave writes the store, taking notesMu.
 func notesSave() {
 	notesMu.Lock()

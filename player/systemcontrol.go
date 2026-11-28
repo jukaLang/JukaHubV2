@@ -673,4 +673,3 @@ func nextScreenTimeout(current int) int {
 	}
 	return screenTimeoutSteps[0]
 }
-

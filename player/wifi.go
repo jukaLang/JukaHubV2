@@ -2229,4 +2229,3 @@ func wifiSavedID(ssid string, saved []savedNetwork) (int, bool) {
 	}
 	return 0, false
 }
-

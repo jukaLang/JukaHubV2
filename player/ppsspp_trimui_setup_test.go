@@ -164,4 +164,3 @@ func TestPPSSPPTrimuiHomeKeepsPackagedControllerMap(t *testing.T) {
 		t.Fatal("a build without an ini got no safe graphics backend")
 	}
 }
-

@@ -27,4 +27,3 @@ func winBatchCommand(script string, args ...string) (*exec.Cmd, error) {
 	cmd.SysProcAttr.CmdLine = line
 	return cmd, nil
 }
-

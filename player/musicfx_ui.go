@@ -60,8 +60,10 @@ var musicFXRows = []musicFXRow{
 		},
 		adj: func(p *musicFXParams, dir int) { p.DelayMs += 20 * dir }},
 	{label: "Echo feedback", hint: "How many echoes follow, up to 90%.",
-		value: func(p musicFXParams) (string, float64) { return strconv.Itoa(p.Feedback) + "%", float64(p.Feedback) / 90 },
-		adj:   func(p *musicFXParams, dir int) { p.Feedback += 5 * dir }},
+		value: func(p musicFXParams) (string, float64) {
+			return strconv.Itoa(p.Feedback) + "%", float64(p.Feedback) / 90
+		},
+		adj: func(p *musicFXParams, dir int) { p.Feedback += 5 * dir }},
 	{label: "Chorus", hint: "A thicker, shimmering sound from a moving copy of itself.",
 		value: func(p musicFXParams) (string, float64) { return musicFXPct(p.Chorus) },
 		adj:   func(p *musicFXParams, dir int) { p.Chorus += 5 * dir }},

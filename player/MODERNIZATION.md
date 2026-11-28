@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **88**.
+Open tasks: **87**.
 
 Open work an agent can finish and check without a person at the device —
 builds, tests, static checks, scripted probes, screenshots it can read — plus
@@ -568,20 +568,6 @@ per language; missing translations fall back to English.
 **Done when.** The on-screen keyboard has pinyin and kana composition with a
 candidate strip (`vkeyboard.go` already has a suggestion strip); physical
 keyboards get `SDL_TEXTEDITING` handling.
-
-### I18N-CJK-1 — Japanese, Korean and Chinese: the tour and line breaks (P2, M)
-**Where.** `player/i18n/{ja,ko,zh-CN}.tour.json` (new), `core.go`
-(`wrapTextLinesRaw`), `notiftext.go` (`wrapWordsMeasured` already cuts a CJK
-run), `uilangface.go`.
-**Done when.** The first-run tour has the three catalogues; `wrapTextLines`
-breaks a CJK run between characters (never before 、。」 or after 「) instead
-of ellipsizing a sentence without spaces; strings added since the catalogues
-were written are translated.
-**Verify.** A wrap case in `notiftext_test.go`; the catalogue test.
-
----
-
-## Security and privacy (SEC)
 
 ### SEC-1 — Every extraction through `os.Root` (P2, M)
 **Where.** `emu7z.go`, `ports_store_install.go`, `ppsspp_managed.go`,

@@ -10,8 +10,6 @@ import (
 	"errors"
 )
 
-
-
 func schedRegistryStartupItems() []schedItem { return nil }
 
 func schedStartupFolderItems() []schedItem { return nil }
@@ -19,5 +17,3 @@ func schedStartupFolderItems() []schedItem { return nil }
 func schedSetApproved(key, name string, enabled bool) error {
 	return errors.New("startup approval is a Windows setting")
 }
-
-

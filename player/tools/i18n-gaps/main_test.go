@@ -11,9 +11,9 @@ import (
 func TestAnalyzeAndStarter(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"en.json": `{"language":"en","strings":{"Play":"Play","Stop":"Stop","Open":"Open"}}`,
-		"ja.json": `{"language":"ja","strings":{"Play":"再生"}}`,
-		"fr.json": `{"language":"fr","strings":{"Play":"Jouer","Stop":"","Open":"Ouvrir"}}`,
+		"en.json":      `{"language":"en","strings":{"Play":"Play","Stop":"Stop","Open":"Open"}}`,
+		"ja.json":      `{"language":"ja","strings":{"Play":"再生"}}`,
+		"fr.json":      `{"language":"fr","strings":{"Play":"Jouer","Stop":"","Open":"Ouvrir"}}`,
 		"en.tour.json": `{"language":"en","strings":{"Tour only":"ignored"}}`,
 	}
 	for name, body := range files {

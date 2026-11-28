@@ -364,4 +364,3 @@ func offlineAIResult(output *offlineAIStreamWriter) (string, error) {
 	}
 	return answer, nil
 }
-

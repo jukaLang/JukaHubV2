@@ -492,4 +492,3 @@ func init() {
 	bootOnShutdown(backlightOn)
 	Cleanup = append(Cleanup, backlightOn)
 }
-

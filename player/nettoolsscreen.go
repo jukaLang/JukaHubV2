@@ -1010,13 +1010,17 @@ func netToolsServerSheet(s *toolsHubSheet, id string) {
 			fmt.Fprintf(&b, "Status:   Running\nAddress:  %s\nUser:     %s\nPassword: %s\n",
 				ftpSrv.Address(), ftpSrv.User(), ftpSrv.Password())
 			fmt.Fprintf(&b, "Folders:  %s\n", strings.Join(ftpSrv.ShareNames(), ", "))
+			if fp := ftpSrv.TLSCertFingerprint(); fp != "" {
+				fmt.Fprintf(&b, "FTPS:     AUTH TLS ready — certificate SHA-256\n          %s\n", fp)
+			}
 			fsClientLines(&b, ftpSrv.Clients())
 		} else {
 			b.WriteString("Status:   Stopped\n")
 			fmt.Fprintf(&b, "Folders:  %s\n", netToolsFTPFolders())
 		}
 		b.WriteString("\nSign in with this user name and password; the password is new every time the server starts and is never saved or logged. " +
-			"FTP is not encrypted: on a network you do not trust, use SFTP instead.")
+			"Turn on FTPS in the client (AUTH TLS, then PROT P) and check the certificate fingerprint above, " +
+			"or use SFTP, on a network you do not trust.")
 	case "ssh":
 		running = sshSrv.Running()
 		whole := false

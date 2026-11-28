@@ -176,4 +176,3 @@ func TestScreenChildAudioBorrowedByPausedOverlay(t *testing.T) {
 		t.Fatal("audio was not restored after the game exited")
 	}
 }
-

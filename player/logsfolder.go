@@ -87,4 +87,3 @@ func bugrepLogToggleDetail() string {
 	}
 	return base
 }
-

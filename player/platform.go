@@ -296,4 +296,3 @@ func MustExecutableDir() string {
 	}
 	return dir
 }
-

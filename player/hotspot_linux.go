@@ -850,4 +850,3 @@ func hotspotBuiltinDHCPNames() map[string]string {
 	}
 	return pool.namesByMAC()
 }
-

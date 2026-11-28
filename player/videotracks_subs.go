@@ -634,4 +634,3 @@ func videoTracksStartSubs(ctx context.Context, sess *playbackSession, config *Co
 	}
 	return nil, "", true
 }
-

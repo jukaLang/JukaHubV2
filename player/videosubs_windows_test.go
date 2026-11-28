@@ -124,4 +124,3 @@ func subtitleTreeHelper(t *testing.T, role, dir string) {
 		t.Fatalf("unknown helper role %q", role)
 	}
 }
-

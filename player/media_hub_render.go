@@ -485,11 +485,11 @@ func mediaHubRender(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	mediaHubEnsureBuilt(config)
- 
+
 	if mediaHub.previewStart == 0 {
 		mediaHub.previewStart = uiClockMS()
 	}
- 
+
 	// mediaHubTick already sampled the network monitor this frame; taking the
 	// lock again here only to reach the same answer is waste on every frame.
 	online := mediaHub.online

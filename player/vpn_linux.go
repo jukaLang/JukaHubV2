@@ -236,4 +236,3 @@ func vpnPlatformRecover() {
 	}
 	vpndRecoverRoutes(vpnRunDir())
 }
-

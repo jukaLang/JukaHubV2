@@ -376,12 +376,12 @@ var mediaHub = struct {
 	rows []mediaRow
 	row  int
 
-	cards   []mediaCard
-	index   int
+	cards []mediaCard
+	index int
 	// previewStart is when the focused card began showing its preview frames.
 	// Zero means "no preview yet"; the art routine shows the poster instead.
 	previewStart uint64
-	scrollY     float64
+	scrollY      float64
 
 	// chipFocus is the Downloads header chip under the ring, -1 on the list.
 	chipFocus int

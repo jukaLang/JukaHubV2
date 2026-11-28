@@ -904,6 +904,15 @@ what the About screen and the updater read.
 - Tools → Toolbox: install popular command-line tools on demand, and run them from the app
 - Tools → Security & trust
 
+- CJK text wraps without breaking kinsoku rules (I18N-CJK-1): `wrapWordsMeasured` /
+  `preferTokenCut` in `player/notiftext.go` now keep a CJK run breaking between
+  characters while never starting a line with 、。」 and never ending one with 「;
+  `cjkBreakLegal` guards both the separator cuts and the default cut. Tests in
+  `player/notiftext_test.go` (`TestWrapWordsMeasuredCJK`) cover the wrap case.
+  Not checked: the ja/ko/zh-CN first-run tour catalogues and their translations,
+  and CJK breaking in `wrapTextLines`/`core.go`.
+
+
 ### Changed
 
 - A cut-off Windows emulator download now resumes from its `.part` with a Range request, keeps the part if the network dies again, and uses one part per release so a nightly tail cannot be appended to a stable archive. Range/Content-Range decisions are pure helpers with tests (DESK-12, partial).
@@ -1082,6 +1091,12 @@ what the About screen and the updater read.
 - Power tools reads as a list instead of a stack of labels
 
 ### Fixed
+
+- The Live Builder's pairing proof was always an empty signature: WebCrypto returns `ArrayBuffer`s and the byte-to-hex helper treated them as empty arrays. It now wraps them as `Uint8Array`, and the web tests check the signature/nonce headers instead of the old plain code header.
+- Configs written with the pre-normalisation built-in salt decrypt again: `decryptData` retries the original derivation when the current key fails, without guessing at user-supplied key material.
+- `TestPkgPublishApps` no longer asserts a Unix executable bit on Windows, where NTFS cannot store one.
+- The shared SDL installer finds `curl.exe`/`wget` when `curl` is not on a Git Bash PATH, and the TrimUI build test skips on host toolchains that emit no `GLIBC_*` symbol versions instead of calling a good binary bad; both still fail on CI.
+- The repo's own `make check` is green again: gofmt, vet, the Go and web suites, workflow/link/backlog checks and the test-only seam comments all pass.
 
 - A Windows launch that stopped because a library this firmware has is too old says so on its card and in its report: JukaHub reads Weston's own `Failed to load module: …: undefined symbol: X, version V` line from the session's log and names the function, the library that should answer it and the version — `libz.so.1 is too old: no inflateValidate (ZLIB_1.2.9)`, which `libpng16.so.16` needs — instead of only "Weston stopped while it was starting", and the same three are the report's first finding (JH-6G5TZF, JH-2S4CSH; `wine_weston_cause.go`)
 - Notepad++ and Wine Test start on a stock Smart Pro again: WestonPack's libpng16 asks zlib for `inflateValidate`, the one function zlib 1.2.9 added, and the firmware loads zlib 1.2.8, so Weston stopped at `undefined symbol: inflateValidate, version ZLIB_1.2.9` in every mode. JukaHub gives the session a shim that answers that call and keeps the firmware's own zlib underneath, so everything else is still its code (JH-6G5TZF, JH-2S4CSH)

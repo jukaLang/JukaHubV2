@@ -282,7 +282,7 @@ func memSwapCreditMB(info memInfo, zramFreeKB, otherFreeKB, needMB uint64) uint6
 // in pages. Pure.
 func memSwapHeader(pageSize int, pages uint64, uuid []byte) []byte {
 	h := make([]byte, pageSize)
-	binary.LittleEndian.PutUint32(h[1024:], 1)              // version
+	binary.LittleEndian.PutUint32(h[1024:], 1)               // version
 	binary.LittleEndian.PutUint32(h[1028:], uint32(pages-1)) // last_page
 	// nr_badpages (1032) stays 0.
 	copy(h[1036:1052], uuid)

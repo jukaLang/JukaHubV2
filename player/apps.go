@@ -722,4 +722,3 @@ func openAppsFolder() {
 	// placeholder file inside the apps folder.
 	openInExplorer(filepath.Join(dir, "apps"))
 }
-

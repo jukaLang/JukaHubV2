@@ -266,4 +266,3 @@ func extractAppIcons(programs []string) {
 	// on the next frame instead of on the next scan.
 	dropAppIconPathCache()
 }
-

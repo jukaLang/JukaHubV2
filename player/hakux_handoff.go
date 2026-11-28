@@ -1176,4 +1176,3 @@ func hakuxHandoffReopenTile(tile string, tries int) {
 		}
 	}
 }
-

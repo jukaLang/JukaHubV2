@@ -1541,4 +1541,3 @@ func prefetchResolveOne(ctx context.Context, config *Config, ytDlpPath, ffprobeP
 	rememberDirectStream(source, direct, effectivePlaybackMaxHeight(config, source))
 	return true
 }
-

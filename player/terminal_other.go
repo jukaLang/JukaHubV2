@@ -38,4 +38,3 @@ func termShellCommand(ctx context.Context, line string) *exec.Cmd {
 func termKillTree(cmd *exec.Cmd) error {
 	return screenChildKill(cmd)
 }
-

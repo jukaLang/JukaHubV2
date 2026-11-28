@@ -1787,4 +1787,3 @@ func raGlibcChoose(c *Config, value string) string {
 	}
 	return "RetroArch's C library: " + raGlibcModeLabel(now)
 }
-

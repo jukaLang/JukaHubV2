@@ -972,4 +972,3 @@ func applyColorVar(config *Config, name, value string) {
 	config.Variables.Custom[name] = rgbHex(c)
 	logDebug("features", "Set %s = %d,%d,%d", name, c.R, c.G, c.B)
 }
-

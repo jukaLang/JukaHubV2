@@ -3039,4 +3039,3 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 func pointInRect(px, py int32, r sdl.Rect) bool {
 	return px >= r.X && px <= r.X+r.W && py >= r.Y && py <= r.Y+r.H
 }
-

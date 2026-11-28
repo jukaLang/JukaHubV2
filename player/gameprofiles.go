@@ -1254,4 +1254,3 @@ func gameProfileRuntimeLabel(runtime string) string {
 		return "NATIVE"
 	}
 }
-

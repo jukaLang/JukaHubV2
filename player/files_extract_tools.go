@@ -857,4 +857,3 @@ func feExtractTidy(out string, st *feExtractStats) error {
 		return nil
 	})
 }
-

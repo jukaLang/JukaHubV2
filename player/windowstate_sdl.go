@@ -117,7 +117,7 @@ func rememberWindowRect(config *Config, window *sdl.Window) {
 	flags := window.GetFlags()
 	r := windowRect{
 		X: int(px), Y: int(py), W: int(pw), H: int(ph), Display: display,
-		Maximized: flags&sdl.WINDOW_MAXIMIZED != 0,
+		Maximized:  flags&sdl.WINDOW_MAXIMIZED != 0,
 		Borderless: flags&sdl.WINDOW_BORDERLESS != 0,
 	}
 	if config.Variables.Custom == nil {

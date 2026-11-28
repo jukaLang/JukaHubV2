@@ -93,4 +93,3 @@ func winBatchCommandLine(comspec, script string, args []string) (string, error) 
 	b.WriteString(`"`)
 	return b.String(), nil
 }
-

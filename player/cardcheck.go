@@ -1757,4 +1757,3 @@ func cardCheckReport(steps []cardCheckStep) string {
 	b.WriteString("How to repair\n-------------\n" + strings.ReplaceAll(cardCheckRepairText, "• ", "- ") + "\n")
 	return b.String()
 }
-

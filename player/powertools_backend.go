@@ -1202,4 +1202,3 @@ func runPowerRsync(source, target string, dryRun bool, timeout time.Duration) (s
 func powerSyncthingStatus() string {
 	return syncthingPowerStatus()
 }
-

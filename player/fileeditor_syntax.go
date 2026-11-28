@@ -800,7 +800,7 @@ func (s *synScanner) stepPython(i int) int {
 }
 
 // pyString opens a Python string whose prefix starts at start and whose
-// quote is at q: ''' and """ run over lines, ' and " end with theirs.
+// quote is at q: ”' and """ run over lines, ' and " end with theirs.
 func (s *synScanner) pyString(start, q int) int {
 	text := s.text
 	switch {

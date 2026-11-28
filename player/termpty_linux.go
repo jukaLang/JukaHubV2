@@ -243,4 +243,3 @@ func termPtySessionAlive(sid int) bool {
 	}
 	return false
 }
-

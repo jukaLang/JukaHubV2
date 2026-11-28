@@ -143,6 +143,7 @@ func toolsHubEnsureScene(config *Config, name, icon, description string) {
 		Description: description,
 	})
 }
+
 // toolsHubOpen opens the Tools hub at its top (cross-area contract: Home, the
 // Start menu, the "tools_open" trigger and every other entry point call it).
 // Coming back from a tool goes through the scene history instead and keeps

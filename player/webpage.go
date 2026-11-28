@@ -1722,7 +1722,7 @@ type webControl struct {
 	// Secret marks a password field. Its value is typed as usual but drawn as
 	// dots: the reader paints on a shared screen, and a prefilled password
 	// rendered in the clear is one glance away from being read off it.
-	Secret                  bool
+	Secret bool
 	// IconOnly marks a <button> whose content is empty (a search bar's
 	// magnifier drawn by a background image). HTML gives an empty <button> no
 	// default label at all, while <input type=submit> without a value says
@@ -15084,11 +15084,11 @@ func webBaseFontSize(config *Config, fontName string) float64 {
 // colours alone would let a stale layout through with the old ramp baked into
 // its rects.
 type webGradientStampValue struct {
-	axis                 uint8 // 0 horizontal, 1 vertical, 2 radial, 3 conic, 4 angled
-	stops                int
-	cx, cy, from, angle  float64
-	cornerX, cornerY     int8
-	first, last          sdl.Color
+	axis                uint8 // 0 horizontal, 1 vertical, 2 radial, 3 conic, 4 angled
+	stops               int
+	cx, cy, from, angle float64
+	cornerX, cornerY    int8
+	first, last         sdl.Color
 }
 
 func webGradientStamp(g webGradient, has bool) webGradientStampValue {

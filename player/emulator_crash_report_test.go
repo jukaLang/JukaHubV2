@@ -107,4 +107,3 @@ func TestEmulatorCrashSavesAndPrunes(t *testing.T) {
 		t.Fatalf("after pruning = %d, want %d", len(emulatorCrashReports()), emuCrashKeep)
 	}
 }
-

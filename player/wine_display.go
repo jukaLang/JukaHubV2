@@ -1165,4 +1165,3 @@ func wineLogEnv(env map[string]string, hide map[string]bool) string {
 	}
 	return strings.Join(words, " ")
 }
-

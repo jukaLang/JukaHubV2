@@ -1708,4 +1708,3 @@ func usbImportSummary(res usbImportResult) string {
 	}
 	return strings.TrimSpace(b.String())
 }
-

@@ -444,6 +444,7 @@ type jpadFeedbackMsg struct {
 	MS           uint16
 }
 
+// Tests call this seam directly; it is kept for their table cases.
 func jpadPackFeedback(sk []byte, m jpadFeedbackMsg) []byte {
 	b := make([]byte, 0, jpadFeedbackLen)
 	b = append(b, jpadHeader(jpadFeedback)...)

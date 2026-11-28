@@ -933,4 +933,3 @@ func usbMtpSerial() string {
 	sum := sha1.Sum([]byte("jukahub-mtp:" + seed))
 	return strings.ToUpper(hex.EncodeToString(sum[:8]))
 }
-

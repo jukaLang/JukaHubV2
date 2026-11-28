@@ -659,4 +659,3 @@ func offlineAIServerStopProc(p *offlineAIServerProc, why string) {
 	}
 	logDebug("voice", "offline AI server stopped (%s)", why)
 }
-

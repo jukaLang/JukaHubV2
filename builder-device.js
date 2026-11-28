@@ -224,7 +224,11 @@
   }
 
   function bytesHex(bytes) {
-    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    // WebCrypto returns ArrayBuffers (not Uint8Arrays) from digest/sign.
+    // Array.from(ArrayBuffer) is empty, which silently sent an empty
+    // signature — the handshake looked signed but proved nothing.
+    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    return Array.from(view).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
   // signedHeaders is the pairing proof: an HMAC of the method, path, body

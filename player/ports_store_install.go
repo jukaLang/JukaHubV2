@@ -822,4 +822,3 @@ func pstoreOpenInstallLog(zipPath string, exports []string) *os.File {
 	}
 	return f
 }
-

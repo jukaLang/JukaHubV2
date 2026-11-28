@@ -130,4 +130,3 @@ func btToolRun(name string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
-

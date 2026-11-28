@@ -151,4 +151,3 @@ func emu7zExtract(ctx context.Context, client *http.Client, archive, dest string
 	}
 	return fmt.Errorf("%w (7-Zip: %s)", errBadToolArchive, detail)
 }
-

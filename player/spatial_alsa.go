@@ -1034,4 +1034,3 @@ func spatialScriptLooks32(text, scriptDir, runDir string, depth int, seen map[st
 	}
 	return false
 }
-

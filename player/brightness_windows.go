@@ -311,4 +311,3 @@ func ddcSetBrightness(pct int) error {
 		return lastErr
 	})
 }
-

@@ -31,9 +31,9 @@ func TestTTSVoiceVolume(t *testing.T) {
 
 func TestTTSModelRefusal(t *testing.T) {
 	for _, tc := range []struct {
-		status       int
-		code, msg    string
-		want         bool
+		status    int
+		code, msg string
+		want      bool
 	}{
 		{http.StatusNotFound, "", "", true},
 		{http.StatusBadRequest, "model_not_found", "The model does not exist", true},

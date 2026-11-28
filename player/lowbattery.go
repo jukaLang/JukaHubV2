@@ -89,6 +89,7 @@ const (
 )
 
 // batteryGuardActionFor is the whole decision, kept pure so every edge case is
+// Tests call this seam directly; it is kept for their table cases.
 // a table row instead of a handheld that sleeps in someone's hands.
 func batteryGuardActionFor(percent int, charging, gameRunning, alreadyActed, alreadyWarned bool) batteryGuardAction {
 	return batteryGuardActionAt(percent, lowBatteryWarnPct, criticalBatteryPct, charging, gameRunning, alreadyActed, alreadyWarned)
@@ -729,4 +730,3 @@ func waitForRetroArchExit(budget time.Duration) bool {
 	}
 	return false
 }
-

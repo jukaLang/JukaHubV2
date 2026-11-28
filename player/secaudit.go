@@ -1723,4 +1723,3 @@ func secAuditProbe(id string, timeout time.Duration) (string, error) {
 	}
 	return text, err
 }
-

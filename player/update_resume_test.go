@@ -443,4 +443,3 @@ func TestSwapHelperLogTailAndParentDir(t *testing.T) {
 		}
 	}
 }
-

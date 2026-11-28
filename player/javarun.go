@@ -651,4 +651,3 @@ func javaQuoteArgs(args []string) string {
 	}
 	return strings.Join(out, " ")
 }
-

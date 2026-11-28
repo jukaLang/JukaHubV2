@@ -693,4 +693,3 @@ func drawSnapFrame(renderer *sdl.Renderer, config *Config, rect sdl.Rect, tex *s
 
 // The only child process here is ffmpeg, started with an argv — never through a
 // shell, so a file name with spaces or quotes is one argument.
-

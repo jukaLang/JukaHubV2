@@ -572,4 +572,3 @@ func visionTranscribeFile(ctx context.Context, key, path string) (string, error)
 	}
 	return strings.TrimSpace(out.Text), nil
 }
-

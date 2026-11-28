@@ -442,4 +442,3 @@ func sttStartInstall(auto bool) bool {
 	}()
 	return true
 }
-

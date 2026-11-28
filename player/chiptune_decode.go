@@ -285,4 +285,3 @@ func chiptuneSpliceArgs(args, input []string, filter string) []string {
 // The SID player is ffmpeg's stdin: it must stay an io.Reader whose io.EOF
 // ends the song.
 var _ io.Reader = (*sidStream)(nil)
-

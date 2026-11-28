@@ -277,4 +277,3 @@ func lyricsEmbeddedWanted(path string) bool {
 	return music.current >= 0 && music.current < len(music.tracks) &&
 		sameAudioPath(music.tracks[music.current].Path, path) && len(music.lyrics) == 0
 }
-

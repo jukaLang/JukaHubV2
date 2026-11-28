@@ -336,13 +336,17 @@ func podEntriesFor(p *podPage, items []musicItem) []podEntry {
 			e.act = func() { podPlayVideo(appConfig, it) }
 		case "series":
 			e.more = true
-			e.open = func() *podPage { return podQueryPage(it.Title, src, musicQuery{What: "seasons", Parent: it}, "No seasons") }
+			e.open = func() *podPage {
+				return podQueryPage(it.Title, src, musicQuery{What: "seasons", Parent: it}, "No seasons")
+			}
 		case "season":
 			e.more = true
 			if it.Count > 0 {
 				e.right = strconv.Itoa(it.Count)
 			}
-			e.open = func() *podPage { return podQueryPage(it.Title, src, musicQuery{What: "episodes", Parent: it}, "No episodes") }
+			e.open = func() *podPage {
+				return podQueryPage(it.Title, src, musicQuery{What: "episodes", Parent: it}, "No episodes")
+			}
 		case "book":
 			e.right = it.Artist
 			e.act = func() {

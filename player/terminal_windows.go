@@ -60,4 +60,3 @@ func termKillTree(cmd *exec.Cmd) error {
 	}
 	return nil
 }
-

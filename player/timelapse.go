@@ -467,4 +467,3 @@ func assembleTimelapseWith(deps timelapseDeps, config *Config, dir, title string
 	}
 	return out, nil
 }
-
