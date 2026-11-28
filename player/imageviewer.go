@@ -1053,6 +1053,9 @@ func imgvMouseDown(mx, my int32, config *Config) {
 		case "markup":
 			imgvMarkUp(config)
 			return
+		case "juka":
+			imgvAskJuka(config)
+			return
 		case "zoomout":
 			imgvZoomBy(-1, screenWidth/2, screenHeight/2)
 			return
@@ -1216,6 +1219,7 @@ func imgvDrawChrome(renderer *sdl.Renderer, config *Config) {
 		// Rotate, rename, delete (imageviewer_edit.go).
 		chips = append(chips, filesChip{ID: "options", Label: "More"})
 	}
+	chips = append(chips, filesChip{ID: "juka", Label: "Ask Juka"})
 	chips = append(chips, filesChip{ID: "close", Label: "Close"})
 	chips, toolbarX := filesDrawToolbar(renderer, config, chips, screenWidth-margin, headerY+4, 36)
 	imgv.chips = chips

@@ -22,6 +22,25 @@ func TestWindowRectRoundTrip(t *testing.T) {
 	}
 }
 
+// FuzzWindowRect guards startup: the saved geometry comes from a user-editable
+// JSON file, so parsing it must never panic on malformed text.
+func FuzzWindowRect(f *testing.F) {
+	for _, seed := range []string{
+		"", "-120,40,1366,768,1,true,false",
+		"1,2,3,4,5,true,false", "999999999999999,0,1280,720,0,false,false",
+		"a,b,c,d,e,f,g",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, text string) {
+		r, ok := parseWindowRect(text)
+		if ok {
+			_ = formatWindowRect(r)
+		}
+		_, _ = clampWindowRect(r, nil)
+	})
+}
+
 func TestWindowRectClamp(t *testing.T) {
 	displays := []displayBounds{{X: 0, Y: 0, W: 1920, H: 1080}, {X: -1920, Y: 200, W: 1600, H: 900}}
 	r := windowRect{X: -1700, Y: 300, W: 1200, H: 800, Display: 1}

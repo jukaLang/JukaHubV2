@@ -484,6 +484,7 @@ func musicPlayTrackAt(index int, gapless bool) {
 		return
 	}
 	track := music.tracks[index]
+	live := music.liveURLs[track.Path]
 	bookKey := music.bookKey
 	// Each audiobook keeps its own listening speed; music the global one
 	// (audioresume.go).
@@ -528,6 +529,7 @@ func musicPlayTrackAt(index int, gapless bool) {
 
 	if previousPath != "" && !sameAudioPath(previousPath, track.Path) {
 		musicRememberPosition(previousPath, previousPos, previousDur)
+		radioICYStop(previousPath)
 	}
 	if bookKey != "" {
 		audioBookRemember(bookKey, track.Path, false)
@@ -540,6 +542,9 @@ func musicPlayTrackAt(index int, gapless bool) {
 	} else {
 		musicStartDecode(track.Path, resume)
 		PlayActivateSound()
+	}
+	if live {
+		radioICYWatch(track.Path)
 	}
 	// Chapters inside one book file (audiobook_chapters.go). A long .m4a or
 	// .mp3 outside a book usually has no length yet (0 until ffprobe answers),
@@ -1008,6 +1013,7 @@ func musicStop() {
 	if proc != nil && proc.Process != nil {
 		_ = proc.Process.Kill()
 	}
+	radioICYStop(path)
 	ClearVideoAudioQueue()
 	// A bit-perfect DAC device goes quiet now and gives the outputs back (a
 	// video may be starting); the reopen runs off this thread.

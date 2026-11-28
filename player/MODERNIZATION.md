@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **87**.
+Open tasks: **75**.
 
 Open work an agent can finish and check without a person at the device —
 builds, tests, static checks, scripted probes, screenshots it can read — plus
@@ -195,20 +195,6 @@ game palettes).
 
 ## Games and emulation (GAME, PSR, XBX)
 
-### GAME-4 — A per-button remap editor for RetroArch games (P2, M)
-**Where.** `racontrols_remap.go` (already writes a one-launch `.rmp` for the
-Buttons choice's swaps and turbo), `racontrols.go`, `game_options_ui.go`.
-**Done when.** The game options sheet maps each RetroPad button of a game
-beyond the swap presets, and the launch writes it through the same remap file
-and cleanup; standalone emulators stay out.
-
-### GAME-6 — RetroArch's overlay pack, and a cancel for Download looks (P3, S) [NET]
-**Where.** `shader_looks_download.go` (shaders and SkyWalker541's overlays
-already), `ratuning.go`, `cheats_db.go` (the buildbot pattern).
-**Done when.** With no overlay found, the Overlay row offers libretro's
-buildbot `overlays.zip` (with progress and the same file-ownership rules), and
-a running Download looks can be cancelled.
-
 ### GAME-10 — Netplay: invites, passwords, plain RetroArch hosts (P3, S)
 **Where.** `netplay_rooms.go`, `netplay_ui.go`, `companion.go`.
 **Done when.** A hosted game can be shared as a link or QR that the phone
@@ -286,16 +272,6 @@ screenshots, achievements, last played, playtime graph, the save-state strip
 and Play / Resume / Options as the first three actions (manuals and guides are
 under More → Manual & guide).
 
-### PROF-2 — Per-person RetroAchievements and standalone-emulator saves (P2, M)
-**Where.** `retroachievements*.go`, `profiles_saves.go`, the managed PPSSPP
-launch (its memory stick folder), DraStic's launch environment,
-`ports_library.go`.
-**Done when.** A profile can sign in to its own RetroAchievements account;
-PPSSPP gets a memory stick folder per profile; ports show the shared-saves
-notice.
-
----
-
 ## Android games (AND)
 
 ### AND-4 — Text input for Android games (P2, M)
@@ -311,14 +287,6 @@ notice.
 current with a pbuffer stays raw; the context-first smoke case asserts 5
 `SDL_GL_SwapWindow` frames.
 
-### AND-18 — Split APKs and app bundles (P3, M)
-**Where.** `apkstore_scan.go`, `apkstore_verdict.go`, `androidpak.go` (staging).
-**Done when.** The store groups a base APK with its splits (same package and
-version, side by side or inside a bundle), judges them as one app, and
-AndroidPak stages the native libraries from the matching split.
-
----
-
 ## Media (MED)
 
 ### MED-7 — Crossfade and ReplayGain (P3, S)
@@ -330,11 +298,6 @@ switched on; both stay off on the bit-perfect path.
 ### MED-8 — Podcasts offline (P2, M)
 **Done when.** Episodes download for offline listening (Downloads queue), OPML
 import/export works, chapters are shown, played episodes clean up.
-
-### MED-10 — Radio buffering and now-playing titles (P3, M) [NET]
-**Done when.** The Radio Browser directory (Music → Radio,
-`radiodir.go`) and saved stations show a buffering state while a stream
-connects and the station's now-playing title (ICY metadata) while it plays.
 
 ### MED-19 — A JavaScript runtime for yt-dlp on Windows (P1, M) [WIN] [NET]
 **Where.** `ytdlp_update.go`, `ytdownload.go` (`ytDlpJSRuntimeArgs` already
@@ -370,22 +333,6 @@ that game's running push.
 caches, backups, old versions, trash) with one-press clean-ups and warns at
 90 % full; the card's file-system dirty flag is checked at boot.
 
-### SYS-19 — Encrypted, versioned save snapshots on WebDAV (P3, M) [NET]
-**Where.** `webdav_sync.go` (WebDAV is a Sync target already, as plain files),
-`ssync.go`, `ssyncui.go`.
-**Done when.** A WebDAV target can also keep versioned, client-encrypted save
-snapshots, restored through the import preview; nothing leaves in plaintext,
-an interrupted upload keeps the previous snapshot usable, and a restore takes
-a Save Manager snapshot first.
-
-### SYS-21 — Juka and pictures, second round (P3, M)
-**Where.** `vision_chat.go`, `vision_video.go`, `chatactions.go`,
-`imageviewer.go`.
-**Done when.** A Community message's actions offer **Ask Juka** for its picture
-(the Discord file is downloaded first); the image viewer sends the picture on
-screen to Juka; a video's transcript upload is compressed (FLAC or Opus) when
-the firmware's ffmpeg has the encoder.
-
 ### SYS-23 — JukaHub OS, second round (P2, M)
 **Where.** `jukaos*.go`, `emulators.go` (`deviceRetroArchCoresDir`),
 `gamelaunch_firmware.go` (`firmwareROMArg`), `elfcompat.go`,
@@ -414,12 +361,6 @@ reports one.
 library), `files_locations.go`, the music and video libraries.
 **Done when.** A network drive can be browsed and copied from in Files, and
 used as a read-only music or video source streamed through its `nasFS`.
-
-### NET-15 — FTPS (explicit TLS) for the FTP server (P3, M)
-**Where.** `ftp_server.go`, `nettoolsscreen.go`.
-**Done when.** `AUTH TLS` with a persisted self-signed certificate whose
-fingerprint the sheet shows, `PROT P` data channels, and the sheet recommends
-FTPS or SFTP.
 
 ### NET-23 — Matter: Apple Home and Google Home accessories without Home Assistant (P2, L) [NET]
 **Where.** New `matter*.go` beside `smarthome_hub.go` (a fourth source of the
@@ -482,13 +423,6 @@ written `"<pad> / <key>"`; the table stays in step.
 button, and the grep lists only the deliberate physical exceptions: hakuX's exit
 chord, "Press A on a controller to join" (hotseat), the one-handed help text and
 the `inmap*.go` Select+R1 chord (pad-only: remap, no keyboard words).
-
-### INP-3 — Controller glyph sets (P2, M)
-**Where.** `inputhints.go` (a third vocabulary dimension: pad family), SDL
-`GameControllerGetType` (go-sdl2 v0.4.40), `gamepad_hotplug.go`.
-**Done when.** Xbox, PlayStation (✕ ○ □ △, L1/R1), Nintendo (B/A swapped
-positions, L/R, ZL/ZR) and TrimUI families are named correctly in every hint;
-Settings → Button hints gains "Pad style: Auto / Xbox / PlayStation / Nintendo".
 
 ### INP-7 — Mouse and touch parity (P2, M)
 **Done when.** Every footer hint badge is clickable (generalise `emuHintHits`),
@@ -569,6 +503,10 @@ per language; missing translations fall back to English.
 candidate strip (`vkeyboard.go` already has a suggestion strip); physical
 keyboards get `SDL_TEXTEDITING` handling.
 
+---
+
+## Security and privacy (SEC)
+
 ### SEC-1 — Every extraction through `os.Root` (P2, M)
 **Where.** `emu7z.go`, `ports_store_install.go`, `ppsspp_managed.go`,
 `tts_install.go`, `emulatorupdates.go`, `androidpak.go`, `relpack.go`,
@@ -634,13 +572,6 @@ of the marked rows, Files has a filter-as-you-type search, and copy and move
 run off-thread with progress (the extraction queue in `files_extract.go` is
 the model: one job at a time, a staging folder, a drain on the SDL thread).
 
-### APP-8 — File uploads in forms (P2, M)
-**Where.** `browser.go` (form submission), `webpage.go` (file control), Files
-picker, `docs/BROWSER.md`.
-**Done when.** A file input opens a bounded local-file picker and sends
-`multipart/form-data` with the selected file, while a local test server asserts
-the filename, bytes, other fields and cookie round-trip.
-
 ### APP-10 — Live bindings between ES modules (P2, M)
 **Where.** `webdom_module.go` (references to imported names),
 `webdom/85_scripts.js` (`modContext`, the namespaces).
@@ -649,14 +580,6 @@ exporting module's namespace (with scope analysis in the rewrite, so local
 variables and property names of the same spelling stay untouched), cycles
 evaluate in the standard's order, and a test links a two-module cycle that
 reassigns an exported `let`.
-
-### APP-15 — 7z extraction without 7-Zip (P3, M)
-**Where.** `sevenzip.go` (reads 7z directories and decodes Copy, LZMA, LZMA2
-and the ARM filters in-process), `files_extract.go`, `emu7z.go`.
-**Done when.** Files extracts a 7z whose coders `sevenzip.go` knows (plus the
-x86 BCJ filter, to add) in-process through the same staging and `os.Root`
-rules, with fixtures made by 7-Zip in the tests; other coders (BCJ2, PPMd,
-AES) still go to 7-Zip.
 
 ### APP-22 — Typing in Windows programs (P2, M)
 **Where.** `vcursor_bridge_linux.go` (the "JukaHub Mouse" uinput device, which
@@ -698,12 +621,6 @@ generated by the release workflow, VERSIONINFO from the version in
 **Done when.** ES modules by concern (canvas, inspector, scenes, export/import,
 validation, gallery, AI panel), the CSP still holds (`_headers`), and the jsdom
 + Playwright suites pass unchanged.
-
-### WEB-3 — Focus-order editor (P2, M)
-**Done when.** The builder shows and edits D-pad order per scene, exported in a
-form `focus.go` reads.
-
----
 
 ## Waiting on Juka (OWNER)
 

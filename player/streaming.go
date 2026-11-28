@@ -210,7 +210,10 @@ func streamFormatSelector(maxHeight int) string {
 	if maxHeight <= 0 {
 		maxHeight = 720
 	}
-	return fmt.Sprintf("best[height<=%d][ext=mp4]/best[height<=%d][vcodec!=none][acodec!=none]/best[height<=%d]",
+	// The first term asks for sound as well: a video-only MP4 often ranks
+	// higher than the muxed 360p file, and picking it left the clip silent
+	// (the same bug typed video sites had, fixed in siteStreamFormatSelector).
+	return fmt.Sprintf("best[height<=%d][ext=mp4][acodec!=none]/best[height<=%d][vcodec!=none][acodec!=none]/best[height<=%d]",
 		maxHeight, maxHeight, maxHeight)
 }
 

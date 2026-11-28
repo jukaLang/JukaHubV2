@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -631,6 +632,57 @@ func TestFEExtractZipWithOtherMethodNeedsSevenZip(t *testing.T) {
 		t.Errorf("the error does not name the method: %v", err)
 	}
 	unzipTestOnly(t, staging)
+}
+
+// TestFEExtract7zInProcess unpacks the x86 BCJ/ARM/ARM64 fixture with the
+// in-process reader: every file is written through the staging root with its
+// parents made, and the CRC the archive carries is checked.
+func TestFEExtract7zInProcess(t *testing.T) {
+	data, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(sevenZipBranchFixture, "\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "RetroArch.7z")
+	if err := os.WriteFile(archive, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var st feExtractStats
+	if err := feExtract7z(context.Background(), archive, out, &st, nil); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	want := map[string]struct {
+		size uint64
+		crc  uint32
+	}{
+		"RetroArch/retroarch.cfg":                  {48, 0xd4bfc37b},
+		"Tools/flash.exe":                          {700, 0x4c5211f8},
+		"RetroArch/ra32.trimui":                    {1026, 0xbed8e8ba},
+		"RetroArch/ra64.trimui":                    {3002, 0xf29928bc},
+		"RetroArch/.retroarch/cores/a_libretro.so": {1501, 0x05c49f7a},
+	}
+	if st.Files != len(want) {
+		t.Errorf("files = %d, want %d", st.Files, len(want))
+	}
+	var total int64
+	for rel, w := range want {
+		body, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Errorf("%s: %v", rel, err)
+			continue
+		}
+		if uint64(len(body)) != w.size || crc32.ChecksumIEEE(body) != w.crc {
+			t.Errorf("%s = %d bytes, CRC %08x; want %d, %08x", rel, len(body), crc32.ChecksumIEEE(body), w.size, w.crc)
+		}
+		total += int64(len(body))
+	}
+	if st.Bytes != total {
+		t.Errorf("stats say %d bytes, files hold %d", st.Bytes, total)
+	}
 }
 
 func TestFEExtractSweepsLeftoverStaging(t *testing.T) {

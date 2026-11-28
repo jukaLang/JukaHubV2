@@ -193,8 +193,21 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		node.Index = i
 		nodes = append(nodes, node)
 	}
-	// Sort by Y then X for stable ordering.
+	// A builder-authored order wins; unlisted elements keep the old Y/X
+	// fallback so an older design or a half-edited list still has a graph.
+	rank := make(map[int]int, len(scene.FocusOrder))
+	for order, index := range scene.FocusOrder {
+		rank[index] = order
+	}
 	sort.Slice(nodes, func(i, j int) bool {
+		ri, oki := rank[nodes[i].Index]
+		rj, okj := rank[nodes[j].Index]
+		if oki != okj {
+			return oki
+		}
+		if oki && ri != rj {
+			return ri < rj
+		}
 		if nodes[i].Rect.Y != nodes[j].Rect.Y {
 			return nodes[i].Rect.Y < nodes[j].Rect.Y
 		}

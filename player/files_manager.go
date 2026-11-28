@@ -844,6 +844,10 @@ func handleFilesChromeMouse(mx, my int32, config *Config) bool {
 		}
 	}
 	if feSortChipRect.W > 0 && pointInRect(mx, my, feSortChipRect) {
+		if webPickActive() && !filesNav.atLocations {
+			showToast("Choose a file with A", ToastInfo())
+			return true
+		}
 		if bgmPickActive() && !filesNav.atLocations {
 			return bgmPickChoose(config, feCurrentPath(config))
 		}
@@ -908,7 +912,9 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	// ("Sort: Name") because a lone "Name" in the corner does not say what it
 	// would do if pressed.
 	sortText := "Sort: " + feSortLabel(feSortModeOf(config))
-	if bgmPickActive() && !filesNav.atLocations {
+	if webPickActive() && !filesNav.atLocations {
+		sortText = "Pick a file"
+	} else if bgmPickActive() && !filesNav.atLocations {
 		sortText = "Use this folder"
 	}
 	sortW, _, _ := font.SizeUTF8(sortText)
@@ -916,7 +922,7 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	chip := sdl.Rect{X: bar.X + bar.W - sortTextW - 28, Y: bar.Y + 9, W: sortTextW + 22, H: bar.H - 18}
 	feSortChipRect = chip
 	chipFill, chipEdge, chipInk := glassChipFill(), glassA(26), ColorTextSecondary()
-	if bgmPickActive() && !filesNav.atLocations {
+	if (webPickActive() || bgmPickActive()) && !filesNav.atLocations {
 		chipFill = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 52}
 		chipEdge = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 150}
 		chipInk = ColorTextPrimary()
@@ -935,7 +941,7 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	totalsW, _, _ := font.SizeUTF8(totals)
 	totalsW32 := int32(totalsW)
 	totalsInk := ColorTextTertiary()
-	if feSelectionCount() > 0 || chatPickActive() || bgmPickActive() || feExtractActive() {
+	if feSelectionCount() > 0 || chatPickActive() || bgmPickActive() || webPickActive() || feExtractActive() {
 		totalsInk = ColorTextAccent()
 	}
 	totalsX := chip.X - totalsW32 - 20
@@ -1047,6 +1053,9 @@ func filesDrawListNotice(renderer *sdl.Renderer, config *Config, element Element
 // feFolderTotalsLabel is the bar's middle reading: what this folder holds, how
 // many rows are marked, and how much room is left on the card beneath it.
 func feFolderTotalsLabel(config *Config) string {
+	if webPickActive() {
+		return "Choose a file for the page"
+	}
 	if bgmPickActive() {
 		return "Choose a song or folder for background music"
 	}
@@ -1810,6 +1819,9 @@ func feFilesKey(key sdl.Keycode, config *Config) bool {
 		openFeSheet(config)
 		return true
 	case sdl.K_x:
+		if webPickActive() {
+			return webPickFocused(config)
+		}
 		if bgmPickActive() {
 			return bgmPickFocused(config)
 		}
@@ -1844,6 +1856,9 @@ func handleFilesController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		openFeSheet(config)
 		return true
 	case sdl.CONTROLLER_BUTTON_X:
+		if webPickActive() {
+			return webPickFocused(config)
+		}
 		if bgmPickActive() {
 			return bgmPickFocused(config)
 		}

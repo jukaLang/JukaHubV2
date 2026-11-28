@@ -43,24 +43,36 @@ func profilesSaveDirs(dir string) (saves, states string) {
 }
 
 // profilesRetroArchValues are the one-launch RetroArch settings for a profile
-// whose folder is dir. Pure.
+// whose folder is dir: its save folders and its own RetroAchievements
+// account, or achievements off when it has none (profiles_ra.go).
 func profilesRetroArchValues(dir string) []raScopeValue {
 	saves, states := profilesSaveDirs(dir)
-	return []raScopeValue{
+	values := []raScopeValue{
 		{Key: "savefile_directory", Value: saves},
 		{Key: "savestate_directory", Value: states},
 		// Saves beside the game would be the owner's again.
 		{Key: "savefiles_in_content_dir", Value: "false"},
 		{Key: "savestates_in_content_dir", Value: "false"},
-		{Key: "cheevos_enable", Value: "false"},
 	}
+	return append(values, profilesRAValues(dir)...)
 }
 
 // profilesPrepareLaunch gives a RetroArch launch the playing profile's
 // folders (gameLaunchRegisterPrepare). The owner's launches are untouched.
 func profilesPrepareLaunch(launcher string, _ libraryGame) {
 	a := profilesCurrent()
-	if a == nil || a.Dir == "" || !retroArchLauncher(launcher) {
+	if a == nil || a.Dir == "" {
+		return
+	}
+	// The managed PPSSPP build reads its home from the environment
+	// (ppssppProfileHomeEnv); make it before the launch writes there.
+	if ppssppIsManagedLauncher(launcher) {
+		home := profilesPPSSPPHome(a.Dir)
+		if err := os.MkdirAll(home, 0o755); err != nil {
+			logWarn("profiles", "cannot create %s: %v", home, err)
+		}
+	}
+	if !retroArchLauncher(launcher) {
 		return
 	}
 	saves, states := profilesSaveDirs(a.Dir)

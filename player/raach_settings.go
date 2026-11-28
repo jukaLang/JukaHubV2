@@ -379,23 +379,9 @@ func raachSettingsRows() []setRow {
 		},
 		{
 			ID: "raachSignIn", Label: "Sign in for games", Kind: setKindAction,
-			Detail: func(*Config) string {
-				user, in, _ := raachStatusNow()
-				switch {
-				case in:
-					return "RetroArch signs in as " + user + " · " + hintKeyFor("A", "Sign in") + " signs in with another account"
-				case user != "":
-					return "RetroArch knows " + user + " but has no login for it · " + hintKeyFor("A", "Sign in") + " signs in"
-				}
-				return "Your retroachievements.org account, for unlocks while you play"
-			},
-			Value: func(*Config) string {
-				if user, in, _ := raachStatusNow(); in {
-					return user
-				}
-				return "Not signed in"
-			},
-			Open: raachOpenSignIn,
+			Detail: func(*Config) string { return raachSignInDetail() },
+			Value:  func(*Config) string { return raachSignInValue() },
+			Open:   raachOpenSignIn,
 		},
 	}
 	for _, s := range raachSwitches {

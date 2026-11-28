@@ -38,7 +38,7 @@ const (
 	// solSaveVersion is written into the file. A reader keeps whatever it
 	// understands of a newer file and starts a new deal if the game itself
 	// does not parse.
-	solSaveVersion = 1
+	solSaveVersion = 2
 	// solUndoCap bounds the undo history, in memory and on the card. Each
 	// step is about 120 bytes, so the full history is some 25 KB.
 	solUndoCap = 200
@@ -47,7 +47,25 @@ const (
 	solSaveDelay = 1500 * time.Millisecond
 
 	solVariantKlondike = "klondike"
+	solVariantFreeCell = "freecell"
 )
+
+// FreeCell's sixteen piles: four cells, four foundations and eight columns,
+// all face up. solMaxPiles also bounds the UI's per-pile arrays.
+const (
+	solMaxPiles = 16
+	solFCell0   = 0
+	solFFound0  = 4
+	solFTab0    = 8
+	solFPiles   = 16
+)
+
+var solFreeCellKinds = [solFPiles]solPileKind{
+	solPileCell, solPileCell, solPileCell, solPileCell,
+	solPileFoundation, solPileFoundation, solPileFoundation, solPileFoundation,
+	solPileTableau, solPileTableau, solPileTableau, solPileTableau,
+	solPileTableau, solPileTableau, solPileTableau, solPileTableau,
+}
 
 // Suits, in the order their letters appear in solSuitChars.
 const (
@@ -136,6 +154,8 @@ func solVariantKinds(variant string) []solPileKind {
 	switch variant {
 	case solVariantKlondike:
 		return solKlondikeKinds[:]
+	case solVariantFreeCell:
+		return solFreeCellKinds[:]
 	}
 	return nil
 }
@@ -161,6 +181,53 @@ type solGame struct {
 	counted bool
 	undo    []solSnap
 	redo    []solSnap
+}
+
+// solDealFor lays out a new game of variant. FreeCell uses the published
+// Microsoft numbered-deal generator so deal 1, 617 and the rest match the
+// cards players remember; Klondike keeps math/rand's stable shuffle.
+func solDealFor(variant string, seed int64, draw int) *solGame {
+	if variant == solVariantFreeCell {
+		return solDealFreeCell(seed)
+	}
+	return solDeal(seed, draw)
+}
+
+// solDealFreeCell reproduces Jim Horne's numbered deals: a 31-bit MSVC LCG,
+// each draw swapping the chosen card with the last remaining one, then dealt
+// 7/7/7/7/6/6/6/6 into eight face-up columns.
+func solDealFreeCell(seed int64) *solGame {
+	state := uint64(seed) & 0x7fffffff
+	// Index k is rank k/4 with ace at 1, in CDHS order.
+	deck := make([]uint8, 52)
+	for k := range deck {
+		deck[k] = uint8(k)
+	}
+	order := make([]uint8, 0, 52)
+	for n := len(deck); n > 0; n-- {
+		state = (state*214013 + 2531011) & 0x7fffffff
+		pick := int((state >> 16) % uint64(n))
+		deck[pick], deck[n-1] = deck[n-1], deck[pick]
+		order = append(order, deck[n-1])
+	}
+	g := &solGame{variant: solVariantFreeCell, kinds: solFreeCellKinds[:], seed: seed}
+	g.piles = make([][]solCard, solFPiles)
+	for i := range g.piles {
+		g.piles[i] = []solCard{}
+	}
+	for i, raw := range order {
+		col := solFTab0
+		switch {
+		case i < 28:
+			col += i / 7
+		default:
+			col += 4 + (i-28)/6
+		}
+		suits := [4]uint8{solClubs, solDiamonds, solHearts, solSpades} // CDHS
+		c := solCard{suit: suits[raw%4], rank: raw/4 + 1, up: true}
+		g.piles[col] = append(g.piles[col], c)
+	}
+	return g
 }
 
 // solDeal shuffles a deck with seed and lays out a new Klondike game.
@@ -298,6 +365,47 @@ func (g *solGame) canDrop(cards []solCard, p int) bool {
 	return false
 }
 
+// emptyCells and emptyColumns feed FreeCell's supermove limit. A destination
+// column that is itself empty does not count: the moving run fills it.
+func (g *solGame) emptyCells() int {
+	n := 0
+	for p, k := range g.kinds {
+		if k == solPileCell && len(g.piles[p]) == 0 {
+			n++
+		}
+	}
+	return n
+}
+
+func (g *solGame) emptyColumns(exclude int) int {
+	n := 0
+	for p, k := range g.kinds {
+		if k == solPileTableau && p != exclude && len(g.piles[p]) == 0 {
+			n++
+		}
+	}
+	return n
+}
+
+func (g *solGame) supermoveLimit(to int) int {
+	if to < 0 || to >= len(g.kinds) || g.kinds[to] != solPileTableau {
+		return 1
+	}
+	cells := g.emptyCells()
+	cols := g.emptyColumns(-1)
+	if len(g.piles[to]) == 0 {
+		cols--
+		if cols < 0 {
+			cols = 0
+		}
+	}
+	limit := (cells + 1) << uint(cols)
+	if limit > 52 {
+		limit = 52
+	}
+	return limit
+}
+
 // foundationFor is the foundation card c can go up on now, -1 for none. A
 // foundation already holding c's suit is preferred; an ace takes the first
 // empty one.
@@ -381,6 +489,26 @@ func (g *solGame) canAutoFinish() bool {
 	if g.won {
 		return false
 	}
+	if g.variant == solVariantFreeCell {
+		// Unlike Klondike, every FreeCell card starts face up and an empty
+		// column takes any rank, so the visible-state test would say "finish"
+		// on the first deal. Play the remaining foundation moves on a copy.
+		if g.complete() {
+			return false
+		}
+		sim := g.cloneForAuto()
+		for i := 0; i < 52; i++ {
+			from, to, ok := sim.nextAutoMove(true)
+			if !ok {
+				return false
+			}
+			sim.apply(from, 1, to)
+			if sim.complete() {
+				return true
+			}
+		}
+		return false
+	}
 	left := 0
 	for p, k := range g.kinds {
 		switch k {
@@ -398,6 +526,18 @@ func (g *solGame) canAutoFinish() bool {
 		}
 	}
 	return left > 0
+}
+
+// cloneForAuto copies just the piles: auto-finish tries the rest of a game
+// without touching the real deal, its undo history or its move count.
+func (g *solGame) cloneForAuto() *solGame {
+	c := *g
+	c.piles = make([][]solCard, len(g.piles))
+	for i, pile := range g.piles {
+		c.piles[i] = append([]solCard(nil), pile...)
+	}
+	c.undo, c.redo = nil, nil
+	return &c
 }
 
 // complete reports whether every card is on the foundations.
@@ -441,7 +581,19 @@ func (g *solGame) smartTarget(p, n int, foundation bool) int {
 			empty = t
 		}
 	}
-	return empty
+	if empty >= 0 {
+		return empty
+	}
+	// A free cell is the last resort: it empties a column but holds only one
+	// card, so it is worse than building on any tableau card.
+	if g.variant == solVariantFreeCell && n == 1 {
+		for p, k := range g.kinds {
+			if k == solPileCell && len(g.piles[p]) == 0 {
+				return p
+			}
+		}
+	}
+	return -1
 }
 
 // smartMoveFrom picks the move a smart move makes from pile p with depth
@@ -477,6 +629,9 @@ func (g *solGame) move(from, n, to int) bool {
 	}
 	pile := g.piles[from]
 	if !g.canDrop(pile[len(pile)-n:], to) {
+		return false
+	}
+	if g.variant == solVariantFreeCell && n > g.supermoveLimit(to) {
 		return false
 	}
 	g.pushUndo()
@@ -667,8 +822,9 @@ type solStats struct {
 // solOptions are the player's settings. AutoMoveOff is stored inverted so a
 // file without it (every file so far) means auto-play on, the default.
 type solOptions struct {
-	Draw        int  `json:"draw"`
-	AutoMoveOff bool `json:"autoMoveOff,omitempty"`
+	Draw        int    `json:"draw"`
+	AutoMoveOff bool   `json:"autoMoveOff,omitempty"`
+	Variant     string `json:"variant,omitempty"`
 }
 
 type solSaveSnap struct {
@@ -694,9 +850,12 @@ type solSaveGame struct {
 // the game: the statistics and options beside it still load.
 type solSaveFile struct {
 	Version int             `json:"version"`
-	Stats   solStats        `json:"stats"`
+	Stats   solStats        `json:"stats"` // the active variant, for older readers
 	Options solOptions      `json:"options"`
 	Game    json.RawMessage `json:"game,omitempty"`
+	// StatsByVariant keeps each game's record separate. A version-1 file has
+	// none; its Stats become Klondike's on read.
+	StatsByVariant map[string]solStats `json:"statsByVariant,omitempty"`
 }
 
 func (g *solGame) toSave() solSaveGame {
@@ -723,6 +882,9 @@ func (g *solGame) toSave() solSaveGame {
 // do not parse are dropped rather than failing the game: the game itself is
 // what the player wants back.
 func solGameFromSave(s solSaveGame) (*solGame, error) {
+	if strings.TrimSpace(s.Variant) == "" {
+		s.Variant = solVariantKlondike // a version-1 game predates variants
+	}
 	kinds := solVariantKinds(s.Variant)
 	if kinds == nil {
 		return nil, fmt.Errorf("solitaire: unknown layout %q", s.Variant)
@@ -784,6 +946,13 @@ func solLoadFile(path string) (solSaveFile, *solGame, error) {
 	if f.Options.Draw != 3 {
 		f.Options.Draw = 1
 	}
+	if strings.TrimSpace(f.Options.Variant) == "" {
+		f.Options.Variant = solVariantKlondike
+	}
+	if len(f.StatsByVariant) == 0 {
+		// Version 1 kept only one set of counters, for Klondike.
+		f.StatsByVariant = map[string]solStats{solVariantKlondike: f.Stats}
+	}
 	raw := strings.TrimSpace(string(f.Game))
 	if raw == "" || raw == "null" {
 		return f, nil, nil
@@ -796,12 +965,25 @@ func solLoadFile(path string) (solSaveFile, *solGame, error) {
 	if err != nil {
 		return f, nil, err
 	}
+	f.Options.Variant = g.variant
 	return f, g, nil
 }
 
 // solEncodeFile is the bytes solitaire.json is written with.
-func solEncodeFile(g *solGame, stats solStats, opts solOptions) ([]byte, error) {
-	f := solSaveFile{Version: solSaveVersion, Stats: stats, Options: opts}
+func solEncodeFile(g *solGame, stats solStats, opts solOptions, byVariant map[string]solStats) ([]byte, error) {
+	variant := opts.Variant
+	if strings.TrimSpace(variant) == "" {
+		variant = solVariantKlondike
+	}
+	all := make(map[string]solStats, len(byVariant)+1)
+	for name, record := range byVariant {
+		all[name] = record
+	}
+	all[variant] = stats
+	f := solSaveFile{
+		Version: solSaveVersion, Stats: stats, Options: opts,
+		StatsByVariant: all,
+	}
 	if g != nil {
 		raw, err := json.Marshal(g.toSave())
 		if err != nil {
@@ -838,13 +1020,14 @@ func solWrite(path string, data []byte, seq uint64) {
 // sol is the game the scene shows. Main thread only, except solWrite's
 // goroutine, which gets its own copy of the bytes.
 var sol struct {
-	loaded  bool
-	game    *solGame
-	stats   solStats
-	opts    solOptions
-	dirty   bool      // changed since the last write
-	dirtyAt time.Time // when it first changed
-	saveSeq uint64
+	loaded         bool
+	game           *solGame
+	stats          solStats // the active variant's counters
+	statsByVariant map[string]solStats
+	opts           solOptions
+	dirty          bool      // changed since the last write
+	dirtyAt        time.Time // when it first changed
+	saveSeq        uint64
 	// lastTick is the previous frame the clock counted from; zero while the
 	// screen is away, so the time spent elsewhere is never counted.
 	lastTick time.Time
@@ -861,12 +1044,23 @@ func solitaireEnsureLoaded() {
 	if err != nil {
 		Log().Warn("solitaire: the saved game could not be read; dealing a new one", "err", err)
 	}
-	sol.stats, sol.opts = f.Stats, f.Options
+	sol.statsByVariant = f.StatsByVariant
+	if len(sol.statsByVariant) == 0 {
+		sol.statsByVariant = map[string]solStats{solVariantKlondike: f.Stats}
+	}
+	sol.opts = f.Options
+	if strings.TrimSpace(sol.opts.Variant) == "" {
+		sol.opts.Variant = solVariantKlondike
+	}
+	if g != nil {
+		sol.opts.Variant = g.variant
+	}
+	sol.stats = sol.statsByVariant[sol.opts.Variant]
 	if sol.opts.Draw != 3 {
 		sol.opts.Draw = 1
 	}
 	if g == nil {
-		g = solDeal(solNewSeed(), sol.opts.Draw)
+		g = solDealFor(sol.opts.Variant, solNewSeed(), sol.opts.Draw)
 		sol.game = g
 		solMarkDirty()
 		return
@@ -888,7 +1082,7 @@ func solSaveNow(wait bool) {
 	if !sol.loaded || sol.game == nil {
 		return
 	}
-	data, err := solEncodeFile(sol.game, sol.stats, sol.opts)
+	data, err := solEncodeFile(sol.game, sol.stats, sol.opts, sol.statsByVariant)
 	if err != nil {
 		logDebug("solitaire", "encode failed: %v", err)
 		return
@@ -975,7 +1169,19 @@ func solNewGame() {
 	if g := sol.game; g != nil && g.counted && !g.won {
 		sol.stats.Streak = 0
 	}
-	sol.game = solDeal(solNewSeed(), sol.opts.Draw)
+	sol.game = solDealFor(sol.opts.Variant, solNewSeed(), sol.opts.Draw)
+	solMarkDirty()
+}
+
+// solSetVariant switches games, keeping each variant's own counters.
+func solSetVariant(variant string) {
+	if solVariantKinds(variant) == nil || variant == sol.opts.Variant {
+		return
+	}
+	sol.statsByVariant[sol.opts.Variant] = sol.stats
+	sol.opts.Variant = variant
+	sol.stats = sol.statsByVariant[variant]
+	sol.game = solDealFor(variant, solNewSeed(), sol.opts.Draw)
 	solMarkDirty()
 }
 
@@ -988,7 +1194,7 @@ func solRestartDeal() {
 		solNewGame()
 		return
 	}
-	g := solDeal(old.seed, sol.opts.Draw)
+	g := solDealFor(old.variant, old.seed, sol.opts.Draw)
 	g.counted = old.counted && !old.won
 	sol.game = g
 	solMarkDirty()

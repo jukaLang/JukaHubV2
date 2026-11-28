@@ -276,6 +276,12 @@ func raTuneOverlayOptions(c *Config) []setOption {
 	for _, o := range list {
 		out = append(out, setOption{Value: o.Path, Label: o.Label})
 	}
+	// Nothing found in RetroArch's folders: the row still offers a way to get
+	// the buildbot pack (and SkyWalker541's borders) without leaving Settings.
+	if len(list) == 0 && len(own) == 0 {
+		out = append(out, setOption{Value: raTuneOverlayDownload, Label: "Download overlays…",
+			Note: "libretro's buildbot pack and SkyWalker541's Brick borders, from Download looks"})
+	}
 	return out
 }
 
@@ -303,7 +309,7 @@ func raTuneOverlayRow() setRow {
 			case !ok:
 				return what + " · looking for overlays…"
 			case len(list) == 0 && raTuneScope == "":
-				return what + " · no overlays found in RetroArch's overlays folder"
+				return what + " · no overlays found; A offers the buildbot pack"
 			}
 			return what + " · A lists them all"
 		},
@@ -321,6 +327,10 @@ func raTuneOverlayRow() setRow {
 			return label
 		},
 		Choose: func(c *Config, value string) {
+			if value == raTuneOverlayDownload {
+				looksDownloadStart(c)
+				return
+			}
 			value = normaliseRATuneOverlay(value)
 			if raTuneScope == "" && value == "" {
 				value = raTuneOwn

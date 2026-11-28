@@ -109,6 +109,9 @@ func TestFTPAuthTLSProtectsControlAndData(t *testing.T) {
 
 	// Sign-in happens inside TLS.
 	c.login(srv)
+	if resp := c.cmd("CWD Roms"); !strings.HasPrefix(resp, "250") {
+		t.Fatalf("CWD Roms = %q, want 250", resp)
+	}
 	if resp := c.cmd("PBSZ 0"); !strings.HasPrefix(resp, "200") {
 		t.Fatalf("PBSZ = %q, want 200", resp)
 	}

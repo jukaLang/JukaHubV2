@@ -1850,7 +1850,22 @@ func feExtractRun(ctx context.Context, job feExtractJob, meter *feExtractMeter) 
 				err = feExtractWithTool(ctx, kind, job.Archive, unpack, &out.Stats, meter, "")
 			}
 		}
-	case feArchive7z, feArchiveRar:
+	case feArchive7z:
+		// The in-process reader takes the coders sevenzip.go knows; an
+		// archive with another coder (or an encrypted one) goes to 7-Zip
+		// with the staging folder cleared first (files_extract_7z.go).
+		err = feExtract7z(ctx, job.Archive, unpack, &out.Stats, meter)
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			var noSpace feNoSpaceError
+			if !errors.As(err, &noSpace) {
+				logInfo("files", "7z in-process extraction stopped: %v; trying 7-Zip", err)
+				out.Stats = feExtractStats{}
+				if cleanErr := feExtractEmpty(unpack); cleanErr == nil {
+					err = feExtractWithTool(ctx, kind, job.Archive, unpack, &out.Stats, meter, job.Password)
+				}
+			}
+		}
+	case feArchiveRar:
 		err = feExtractWithTool(ctx, kind, job.Archive, unpack, &out.Stats, meter, job.Password)
 	default:
 		err = errFeNotArchive

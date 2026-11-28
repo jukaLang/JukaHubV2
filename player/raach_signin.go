@@ -51,24 +51,33 @@ var (
 	raachSignInUser string
 )
 
-// raachOpenSignIn is the row's press: the username first.
+// raachOpenSignIn is the row's press: the username first. The owner's login
+// is written into RetroArch's configs; a profile's is kept in its own folder
+// (profiles_ra.go) and applied to each of its launches.
 func raachOpenSignIn(*Config) {
-	// The login is the owner's RetroArch account, used by their games: a
-	// profile's games play with achievements off (profiles_saves.go).
-	if profilesRefuseUnlessOwner("sign RetroArch in") {
+	raachSignInProfileDir = ""
+	a := profilesCurrent()
+	if a != nil && a.Dir == "" {
+		ShowToast("A guest session cannot keep an account: sign in from your own profile", ToastKindWarning)
 		return
 	}
-	if retroArchRunning() {
-		ShowToast("RetroArch is running: it rewrites its settings when it closes. Quit it first", ToastKindWarning)
-		return
-	}
-	if len(raScopeTargets(retroArchConfigCandidates())) == 0 {
-		ShowToast("RetroArch's settings file was not found: start RetroArch once, then sign in", ToastKindWarning)
-		return
-	}
-	seed, _, _ := raachStatusNow()
-	if seed == "" {
-		seed = strings.TrimSpace(raEffectiveCredentials().Username)
+	seed := ""
+	if a != nil {
+		raachSignInProfileDir = a.Dir
+		seed = profilesRALoad(a.Dir).User
+	} else {
+		if retroArchRunning() {
+			ShowToast("RetroArch is running: it rewrites its settings when it closes. Quit it first", ToastKindWarning)
+			return
+		}
+		if len(raScopeTargets(retroArchConfigCandidates())) == 0 {
+			ShowToast("RetroArch's settings file was not found: start RetroArch once, then sign in", ToastKindWarning)
+			return
+		}
+		seed, _, _ = raachStatusNow()
+		if seed == "" {
+			seed = strings.TrimSpace(raEffectiveCredentials().Username)
+		}
 	}
 	tbxOpenPrompt("RetroAchievements username", "Your username on retroachievements.org", seed, func(text string) {
 		user := strings.TrimSpace(text)
@@ -111,6 +120,23 @@ func raachPassSubmit(pass string) {
 	}
 	if len(pass) > raachPassMax || strings.ContainsAny(pass, "\"\r\n") {
 		ShowToast("RetroArch cannot store that password in its settings: sign in from RetroArch's own menu", ToastKindWarning)
+		return
+	}
+	if dir := raachSignInProfileDir; dir != "" {
+		raachSignInProfileDir = ""
+		go func() {
+			err := profilesRASave(dir, user, pass)
+			tbxPost(func() {
+				raachStatusInvalidate()
+				raInvalidateCredentialCache()
+				if err != nil {
+					logWarn("achievements", "a profile's sign-in was not saved: %v", err)
+					ShowToast("Could not save the profile's account: "+firstLine(err.Error()), ToastKindError)
+					return
+				}
+				ShowToast("Signed in as "+user+": this profile's games play with their achievements", ToastKindSuccess)
+			})
+		}()
 		return
 	}
 	go func() {

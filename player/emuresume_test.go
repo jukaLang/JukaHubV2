@@ -54,6 +54,19 @@ func TestEMURangeDecisions(t *testing.T) {
 	}
 }
 
+// FuzzEMUContentRange guards the resume path against a hostile or broken
+// server: a Content-Range must be parsed without panics or huge allocations.
+func FuzzEMUContentRange(f *testing.F) {
+	for _, seed := range []string{"bytes 10-19/20", "bytes 0-0/1", "bytes 5-4/9", "bogus", "", "bytes 999999999999999999999-1/2"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, header string) {
+		for _, offset := range []int64{0, 1, 10, 1 << 40} {
+			_, _ = emuParseContentRange(header, offset)
+		}
+	})
+}
+
 // A cut-off transfer leaves a .part behind; the next download must ask for
 // the missing tail and produce the digest of the whole file.
 func TestEMUDownloadResumesPart(t *testing.T) {

@@ -19,7 +19,7 @@ func TestSolitaireSaveLoad(t *testing.T) {
 	g.drawStock()
 	g.counted = true
 	stats := solStats{Played: 3, Won: 1, Streak: 1, BestStreak: 1, BestTimeMs: 90000, FewestMoves: 80}
-	data, err := solEncodeFile(g, stats, solOptions{Draw: 3, AutoMoveOff: true})
+	data, err := solEncodeFile(g, stats, solOptions{Draw: 3, AutoMoveOff: true}, map[string]solStats{solVariantKlondike: stats})
 	if err != nil {
 		t.Fatal(err)
 	}

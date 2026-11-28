@@ -421,11 +421,89 @@ func visionHear(ctx context.Context, key, ffmpeg, path, dir string) (transcript 
 	if !speech {
 		return "", true, nil
 	}
-	text, err := visionTranscribeFile(ctx, key, wav)
+	upload := wav
+	if enc, ext := visionSpeechEncoderFor(ctx, ffmpeg); enc != "" {
+		if out, cerr := visionCompressSpeech(ctx, ffmpeg, wav, enc, ext); cerr == nil {
+			upload = out
+		} else {
+			logDebug("groq", "compressing the transcript sound: %v", cerr)
+		}
+	}
+	text, err := visionTranscribeFile(ctx, key, upload)
 	if err != nil {
 		return "", false, err
 	}
 	return visionCutText(text, visionTranscriptMax), true, nil
+}
+
+// visionPickSpeechEncoder reads `ffmpeg -encoders` for a compressed format
+// Whisper accepts, preferring lossless FLAC. Nothing is chosen for an ffmpeg
+// without one: the WAV is then uploaded as before.
+func visionPickSpeechEncoder(encoders string) (name, ext string) {
+	for _, line := range strings.Split(encoders, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		switch fields[1] {
+		case "flac":
+			return "flac", ".flac"
+		case "libopus":
+			return "libopus", ".opus"
+		}
+	}
+	return "", ""
+}
+
+// visionSpeechEncoderFor asks this ffmpeg which compressed encoder it has.
+func visionSpeechEncoderFor(ctx context.Context, ffmpeg string) (name, ext string) {
+	runCtx, cancel := context.WithTimeout(ctx, visionProbeTimeout)
+	defer cancel()
+	cmd := hiddenCommandContext(runCtx, ffmpeg, "-hide_banner", "-encoders")
+	cmd.Stderr = io.Discard
+	cmd.WaitDelay = 3 * time.Second
+	out, err := cmd.Output()
+	if err != nil {
+		return "", ""
+	}
+	return visionPickSpeechEncoder(string(out))
+}
+
+// visionCompressSpeech writes the WAV as FLAC or Opus beside it and returns
+// the new path. A failure leaves the WAV for the caller to upload.
+func visionCompressSpeech(ctx context.Context, ffmpeg, wav, encoder, ext string) (string, error) {
+	out := strings.TrimSuffix(wav, filepath.Ext(wav)) + ext
+	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", wav}
+	switch encoder {
+	case "flac":
+		args = append(args, "-c:a", "flac", "-f", "flac", out)
+	case "libopus":
+		args = append(args, "-c:a", "libopus", "-b:a", "32k", "-f", "opus", out)
+	default:
+		return "", fmt.Errorf("no compressor for %q", encoder)
+	}
+	if err := visionRunFFmpeg(ctx, ffmpeg, args, visionSoundTimeout, nil); err != nil {
+		return "", err
+	}
+	info, err := os.Stat(out)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() == 0 {
+		return "", errors.New("the compressed sound was empty")
+	}
+	return out, nil
+}
+
+// visionSpeechMIME is the content type of a transcript upload.
+func visionSpeechMIME(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".flac":
+		return "audio/flac"
+	case ".opus":
+		return "audio/ogg"
+	}
+	return "audio/wav"
 }
 
 // visionExtractSound writes the first ten minutes of a file's first sound
@@ -525,8 +603,8 @@ func visionTranscribeFile(ctx context.Context, key, path string) (string, error)
 	var frame bytes.Buffer
 	mw := multipart.NewWriter(&frame)
 	header := make(textproto.MIMEHeader)
-	header.Set("Content-Disposition", `form-data; name="file"; filename="sound.wav"`)
-	header.Set("Content-Type", "audio/wav")
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename=%q`, filepath.Base(path)))
+	header.Set("Content-Type", visionSpeechMIME(path))
 	if _, err := mw.CreatePart(header); err != nil {
 		return "", err
 	}

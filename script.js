@@ -21,6 +21,7 @@ const clearButton = document.getElementById('clearButton');
 const propertiesTabs = document.querySelectorAll('.properties-tab');
 const elementPropertiesPanel = document.getElementById('elementPropertiesPanel');
 const appInfoPanel = document.getElementById('appInfoPanel');
+const focusPropertiesPanel = document.getElementById('focusPropertiesPanel');
 
 // Global State
 let backgroundPath = '';
@@ -1666,6 +1667,10 @@ function setupEventListeners() {
       switchTab(tabId);
     });
   });
+  document.getElementById('focusOrderList')?.addEventListener('click', event => {
+    const button = event.target.closest('button[data-focus-move]');
+    if (button) moveFocusOrder(Number(button.dataset.focusIndex), button.dataset.focusMove);
+  });
 
   // Sidebar panel toggles: off-canvas drawers on small screens, collapsible
   // rails on desktop.
@@ -2010,17 +2015,18 @@ function switchTab(tabId) {
   });
 
   // Show/hide panels
-  if (tabId === 'app-properties') {
-    appInfoPanel.style.display = 'block';
-    appInfoPanel.classList.add('active');
-    elementPropertiesPanel.style.display = 'none';
-    elementPropertiesPanel.classList.remove('active');
-  } else {
-    appInfoPanel.style.display = 'none';
-    appInfoPanel.classList.remove('active');
-    elementPropertiesPanel.style.display = 'block';
-    elementPropertiesPanel.classList.add('active');
+  for (const [id, panel] of [
+    ['app-properties', appInfoPanel],
+    ['focus-properties', focusPropertiesPanel],
+  ]) {
+    if (!panel) continue;
+    const show = tabId === id;
+    panel.style.display = show ? 'block' : 'none';
+    panel.classList.toggle('active', show);
   }
+  elementPropertiesPanel.style.display = tabId === 'app-properties' || tabId === 'focus-properties' ? 'none' : 'block';
+  elementPropertiesPanel.classList.toggle('active', tabId !== 'app-properties' && tabId !== 'focus-properties');
+  if (tabId === 'focus-properties') renderFocusOrder();
 }
 
 // Reflect the live canvas geometry in the size picker and its custom fields so
@@ -2192,6 +2198,7 @@ function changeScene() {
   currentScene = sceneSelector.value;
   loadScene(currentScene); // also refreshes the scene bars
   updateSceneBadge();
+  renderFocusOrder();
 }
 
 function loadScene(sceneName) {
@@ -2706,6 +2713,88 @@ function handleResize(el, event) {
   document.addEventListener('mouseup', onMouseUp);
 }
 
+
+// The player's focus graph accepts these types (focus.go:isFocusableElement).
+// Keep the two lists in step: the inspector only orders elements that can
+// actually receive focus.
+const FOCUSABLE_TYPES = new Set([
+  'button', 'input', 'searchresults', 'dynamiclist', 'recent', 'favorites',
+  'chat', 'themegallery', 'toggle', 'textbrowser', 'shortslist', 'packagelist',
+]);
+
+function focusableSceneElements(sceneName) {
+  return (scenes[sceneName] || []).map((el, index) => ({ el, index }))
+    .filter(({ el }) => FOCUSABLE_TYPES.has((el.getAttribute('data-type') || '').toLowerCase()));
+}
+
+function focusRank(el) {
+  const value = Number(el.getAttribute('data-focus-order'));
+  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+}
+
+// The exported scene list: indices into scene.elements, in D-pad order.
+function focusOrderForScene(sceneName) {
+  return focusableSceneElements(sceneName)
+    .sort((a, b) => focusRank(a.el) - focusRank(b.el) || a.index - b.index)
+    .map(({ index }) => index);
+}
+
+function setFocusOrder(sceneName, order) {
+  const ranks = new Map(order.map((index, rank) => [index, rank]));
+  // The canvas is authoritative: saveCurrentScene() copies it into scenes[],
+  // so writing only the stored clones would be undone at the next export.
+  Array.from(canvas.children).forEach((el, index) => {
+    if (!FOCUSABLE_TYPES.has((el.getAttribute('data-type') || '').toLowerCase())) return;
+    if (ranks.has(index)) el.setAttribute('data-focus-order', String(ranks.get(index)));
+  });
+}
+
+function focusItemLabel(el) {
+  const text = (el.querySelector('.text-content')?.textContent || el.getAttribute('data-type') || 'element').trim();
+  return text.length > 42 ? text.slice(0, 41) + '…' : text;
+}
+
+function renderFocusOrder() {
+  const list = document.getElementById('focusOrderList');
+  if (!list || !scenes[currentScene]) return;
+  list.replaceChildren();
+  const order = focusOrderForScene(currentScene);
+  order.forEach((index, position) => {
+    const el = scenes[currentScene][index];
+    if (!el) return;
+    const item = document.createElement('li');
+    item.className = 'focus-order-item';
+    const label = document.createElement('span');
+    label.className = 'focus-order-label';
+    label.textContent = `${position + 1}. ${focusItemLabel(el)}`;
+    item.appendChild(label);
+    for (const [move, glyph] of [['up', '↑'], ['down', '↓']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = glyph;
+      button.dataset.focusMove = move;
+      button.dataset.focusIndex = String(index);
+      button.setAttribute('aria-label', `Move ${focusItemLabel(el)} ${move} in D-pad order`);
+      button.disabled = move === 'up' ? position === 0 : position === order.length - 1;
+      item.appendChild(button);
+    }
+    list.appendChild(item);
+  });
+}
+
+function moveFocusOrder(index, move) {
+  const order = focusOrderForScene(currentScene);
+  const from = order.indexOf(index);
+  const to = from + (move === 'down' ? 1 : -1);
+  if (from < 0 || to < 0 || to >= order.length) return;
+  pushUndo('focus order');
+  [order[from], order[to]] = [order[to], order[from]];
+  setFocusOrder(currentScene, order);
+  saveCurrentScene(); // the export reads scenes[], not the live canvas
+  renderFocusOrder();
+  scheduleAutoSave();
+  showToast('D-pad order updated', 'success');
+}
 
 function showElementProperties(el) {
   const noSelection = document.getElementById('noSelection');
@@ -3777,7 +3866,8 @@ function buildEditorConfig() {
     variables: exportedVariables,
     scenes: Object.keys(scenes).map(sceneName => Object.assign({}, importedConfig.scenes[sceneName] || {}, {
       name: sceneName,
-      elements: scenes[sceneName].map(el => elementToConfig(el))
+      elements: scenes[sceneName].map(el => elementToConfig(el)),
+      focusOrder: focusOrderForScene(sceneName)
     }))
   });
 }
@@ -4916,7 +5006,8 @@ function configToXml(config) {
         ['icon', scene.icon],
         ['description', scene.description],
         ['background', scene.background],
-        ['layout', scene.layout]
+        ['layout', scene.layout],
+        ['focusOrder', Array.isArray(scene.focusOrder) ? scene.focusOrder.join(',') : '']
       ]) + '>\n';
 
       for (const el of scene.elements) {
@@ -5120,6 +5211,7 @@ function saveCurrentScene() {
   // with its resolved value for good half a second into any preview.
   if (previewMode) return;
   scenes[currentScene] = Array.from(canvas.children).map(el => el.cloneNode(true));
+  renderFocusOrder();
 }
 
 // Scene management functions
@@ -5296,9 +5388,12 @@ function loadJukaApp(input) {
     // the current scene on the canvas (and wires it). Appending every element
     // of every scene to the live canvas first, wiring each one, then clearing
     // it again only cost time on import.
-    scene.elements.forEach(elementData => {
+    scene.elements.forEach((elementData, index) => {
       const el = createElementFromData(elementData, String(scene.layout || '').trim().toLowerCase());
-      if (el) scenes[scene.name].push(el);
+      if (!el) return;
+      const rank = Array.isArray(scene.focusOrder) ? scene.focusOrder.indexOf(index) : -1;
+      if (rank >= 0) el.setAttribute('data-focus-order', String(rank));
+      scenes[scene.name].push(el);
     });
   });
 

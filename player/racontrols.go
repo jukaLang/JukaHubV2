@@ -248,8 +248,9 @@ func gameTurboSpeedSetting(c *Config) string {
 
 // gameControlsGame is one ROM's own choices; "" follows its console.
 type gameControlsGame struct {
-	Buttons string `json:"buttons,omitempty"`
-	Turbo   string `json:"turbo,omitempty"`
+	Buttons string         `json:"buttons,omitempty"`
+	Turbo   string         `json:"turbo,omitempty"`
+	Map     map[string]int `json:"map,omitempty"` // per-button remap (racontrols_map.go)
 }
 
 type gameControlsFile struct {
@@ -296,7 +297,8 @@ func gameControlsLoadLocked() {
 	for rom, g := range file.Games {
 		key := gameOptionsKey(rom)
 		g.Buttons, g.Turbo = normaliseGameButtons(g.Buttons), normaliseGameTurbo(g.Turbo)
-		if key == "" || (g.Buttons == "" && g.Turbo == "") {
+		g.Map = normaliseGameButtonsMap(g.Map)
+		if key == "" || (g.Buttons == "" && g.Turbo == "" && len(g.Map) == 0) {
 			continue
 		}
 		gameControlsStore.games[key] = g
@@ -323,9 +325,10 @@ func gameControlsSet(romPath string, g gameControlsGame) {
 		return
 	}
 	g.Buttons, g.Turbo = normaliseGameButtons(g.Buttons), normaliseGameTurbo(g.Turbo)
+	g.Map = normaliseGameButtonsMap(g.Map)
 	gameControlsStore.mu.Lock()
 	gameControlsLoadLocked()
-	if g.Buttons == "" && g.Turbo == "" {
+	if g.Buttons == "" && g.Turbo == "" && len(g.Map) == 0 {
 		delete(gameControlsStore.games, key)
 	} else {
 		gameControlsStore.games[key] = g
@@ -342,7 +345,7 @@ func gameControlsForget(romPath string) {
 	ctrlLayoutForgetGame(romPath) // its control layout (ctrllayout_store.go)
 	raGameRecordsForget(romPath)  // its hotkeys and aspect ratio (rahotkeys_store.go)
 	emuExtrasForget(romPath)      // its PlayStation pad and widescreen (widescreen_store.go)
-	if own := gameControlsFor(romPath); own.Buttons != "" || own.Turbo != "" {
+	if own := gameControlsFor(romPath); own.Buttons != "" || own.Turbo != "" || len(own.Map) > 0 {
 		gameControlsSet(romPath, gameControlsGame{})
 	}
 }
@@ -466,6 +469,8 @@ func prepareGameControls(launcher string, game libraryGame) {
 	layout, _ := ctrlLayoutLaunchFor(launcher, game)
 	// D-pad as stick goes in under the layout too (racontrols_dpad.go).
 	remap := ctrlLayoutMergeRemap(raDpadStickMerge(raRemapPreset(buttons), game), layout)
+	// The game's own per-button map wins over both (racontrols_map.go).
+	remap = gameButtonsMapMerge(remap, gameControlsFor(game.Path).Map)
 	if len(remap) == 0 && turbo == gameTurboOff {
 		gameControlsSetNote(game.Path, "")
 		return

@@ -11,6 +11,106 @@ what the About screen and the updater read.
 
 ### Added
 
+- Sync can keep encrypted, versioned save snapshots on WebDAV (SYS-19): **Save a snapshot** writes one sealed version and leaves earlier ones, **Restore a snapshot** lists the newest versions, downloads the chosen one and opens the import preview with the snapshot's versions winning, and a wrong passphrase or a damaged file changes nothing. Backend: `webdav_snapshots.go` (`webdavSnapshotUpload`, `webdavSnapshotList`, `webdavSnapshotFetch`, `webdavSnapshotPreview`, `webdavSnapshotRestore`) and the rows in `ssyncui.go`; tests in `webdav_snapshots_test.go` cover upload/list/fetch/restore, an interrupted upload keeping the earlier version, and names that cannot leave the folder. Not checked: a real WebDAV server (the test runs one locally).
+
+- A profile can sign in to its own RetroAchievements account (PROF-2): Settings → RetroAchievements → Sign in for games keeps the login in the profile's own sealed file and each of its RetroArch launches carries it (achievements stay off when it has none); the managed PPSSPP gets `JUKAHUB_PPSSPP_HOME` inside the profile, so its memstick and states do not mix with the owner's, and ports now show the shared-saves notice once. Backend: `profiles_ra.go`, `ppssppProfileHomeEnv` in `ppsspp_resume.go`, the launcher fallback in `ppsspp_managed.go`, the sign-in branch in `raach_signin.go`, and the gate in `ports_library.go`; tests in `profiles_extra_test.go` check the sealed account, the launch values and the profile's PPSSPP home. Not checked: a real RetroArch or PPSSPP launch, or the ports notice on a handheld.
+
+- The builder's Inspector has a **D-pad order** tab: buttons move focusable elements up or down, the order is stored on the elements, exported as each scene's `focusOrder`, and applied by the player's focus graph (older scenes keep the old Y/X order). XML export carries the list too (WEB-3).
+- A Community message that is only a picture offers Ask Juka, and Juka gets the picture itself: a Discord link is downloaded to a real file first, and the picture viewer has an Ask Juka chip that sends the picture on screen for both local files and chat images (SYS-21). A video's transcript is uploaded as FLAC, or Opus, when the firmware's ffmpeg has the encoder, falling back to the WAV; the multipart header names the compressed file. Backend: `juka_pictures.go` (`chatAskJukaAboutMessage`, `jukaPictureFromURL`, `imgvAskJuka`), the action in `chatactions.go`, the chip in `imageviewer.go`, and `visionPickSpeechEncoder`/`visionCompressSpeech`/`visionSpeechMIME` in `vision_video.go`; tests in `juka_pictures_test.go` cover a picture-only action, the downloaded bytes/type/name, the encoder choice and the upload MIME. Not checked: a real Discord attachment, the viewer chip on a handheld, or an ffmpeg with FLAC/Opus.
+
+- Download looks can be cancelled by pressing it again while it runs (GAME-6): the row says "Cancelling…", the transfer and the overlay pass stop at the context, and a cancelled run says so instead of reporting a network failure. The Overlay row offers libretro's buildbot `overlays.zip`, with SkyWalker541's Brick pack, when no overlay is found. Backend: `looksDL.cancel`, `looksDownloadCancel`, the context through `looksDownload` and `looksFetchOverlays`'s fallback list, and the download stop in `raTuneOverlayOptions`; tests in `looks_download_test.go` cover the cancel seam, a cancelled transfer and the fallback URL. Not checked: a real buildbot download or a RetroArch launch on a handheld.
+
+- A page's file input opens Files to pick a bounded local file (APP-8): the
+  chosen path stays on the control, and sending the form puts the file in the
+  multipart body with its base name beside the other fields and the page's
+  cookies; a form that is not a multipart POST says so instead of silently
+  dropping the file. Backend: the `file` control kind and its `Display` in
+  `webpage.go`, the Files pick mode in `webfile_pick.go`, and
+  `browserFormNavigationFiles` plus the submit path in `browser.go`; test
+  `TestBrowserMultipartFormSendsAFile` serves a local form and upload endpoint
+  and checks the filename, bytes, other fields, a cookie sent and one set by
+  the upload response. Not checked: a real site's upload endpoint or a file
+  picked on a handheld.
+
+- A radio station's Now playing row says "Buffering" until its decoder has
+  queued its first sample and shows the station's own ICY `StreamTitle` while
+  it plays (MED-10): the Radio directory and the saved stations share that row,
+  so both get it; a station without the `icy-metaint` header keeps its name.
+  Backend: `radiometa.go` (`radioICYPoll`, `radioICYWatch`), the buffering and
+  title fields in `musicNowState`/`musicNow` (`music_transport.go`), and the row
+  in `radiodir_ui.go`; tests in `radiometa_test.go` cover a metadata block, a
+  stream without the header, the buffering/playing row and the player state
+  flipping at the first PCM. Not checked: a real station's ICY stream on a
+  handheld (the test serves the metadata from a local server).
+
+- Files unpacks a .7z itself when the archive's coders are ones the reader
+  knows (APP-15): Copy, LZMA and LZMA2 with the x86 BCJ, ARM, ARM-Thumb and
+  ARM64 branch filters are decoded in-process through the same staging folder,
+  `os.Root` writes, space budget, cancellation and CRC checks as the other
+  formats; BCJ2, PPMd, AES and unknown coders still fall back to the installed
+  7-Zip after the staging folder is cleared. Backend: the stateful x86 BCJ
+  inverse filter in `sevenzip.go`, `feExtract7z` in `files_extract_7z.go`, and
+  the in-process-then-fallback switch in `files_extract.go`; tests in
+  `sevenzip_test.go` decode the 7-Zip-made BCJ `Tools/flash.exe`, and
+  `files_extract_test.go` unpacks the fixture end to end and checks every
+  file's size and CRC. Not checked: a real 7z with a BCJ2/PPMd/AES coder on a
+  handheld (the existing 7-Zip path handles it).
+
+- Button hints name the pad in hand in its own family (INP-3): Settings →
+  Controls → Button hints gains "Pad style: Auto / Xbox / PlayStation /
+  Nintendo", and pad badges are renamed to ✕ ○ □ △ or Nintendo's swapped
+  B/A-Y/X with L/R and ZL/ZR (chords and "Hold …" included), while the
+  keyboard vocabulary is untouched; Auto reads the connected controller's SDL
+  name. Backend: `hintPadFamily*` and `hintPadStyle*` in `inputhints.go`, the
+  row in `inmap_settings.go`; tests in `inputhints_padstyle_test.go` cover the
+  three families' badges, the name mapping, the setting and `hintKeyIn` after a
+  style change. Not checked: SDL's controller type on hardware (go-sdl2 v0.4.40
+  exposes no `GameControllerGetType` wrapper, so Auto maps the controller's
+  name), or a real DualSense/Switch pad.
+
+- A RetroArch game's buttons can be remapped one at a time (GAME-4): the game
+  options sheet shows a row for each RetroPad button (A, B, X, Y, L/R, L2/R2,
+  L3/R3, Select, Start, D-pad) that cycles through every RetroPad button and
+  None; the game's own map is stored beside its Buttons/Turbo choices and laid
+  over the preset and control layout when the one-launch remap file is
+  written, so the existing cleanup and the "never shadow a user's remap" rule
+  still hold, and standalone emulators are unchanged. Backend: `gameButtonsMap*`
+  in `racontrols_map.go`, the `map` field and merge in `racontrols.go`, the
+  rows in `game_options_ui.go`; tests in `racontrols_map_test.go` cover the
+  merge and its remap file, the target ladder, the row names and a map-only
+  record surviving a reload. Not checked: a real RetroArch launch reading the
+  file on a handheld.
+
+- Fuzz seeds for the download resume `Content-Range` parser and the persisted window geometry, so malformed server headers or a hand-edited `jukauser.json` cannot panic startup.
+
+- The FTP server speaks FTPS (NET-15): `AUTH TLS` upgrades the control
+  connection before sign-in and `PROT P` puts the passive data channels behind
+  TLS, with one self-signed certificate kept in the app data folder so the
+  fingerprint a client pinned survives restarts; the Network tools sheet shows
+  its SHA-256 and recommends FTPS or SFTP. Backend: `ftp_tls.go`
+  (`ftpLoadOrCreateCert`, `ftpCertFingerprint`, `authTLS`), the `AUTH`/`PBSZ`/
+  `PROT` commands and TLS data path in `ftp_server.go`, the sheet in
+  `nettoolsscreen.go`; tests in `ftp_tls_test.go` cover the upgraded control
+  connection with a certificate that matches the sheet's fingerprint, a TLS
+  upload and download, `PBSZ`/`PROT` refused before `AUTH TLS` and after
+  sign-in, and the certificate's persistence, validity and replacement. Not
+  checked: a desktop FTP client (FileZilla and friends) against the handheld,
+  or TLS on a real device.
+
+- A split APK's pieces count as one app (AND-18): the store folds
+  `split_config.*.apk` files whose manifest names the same package and version
+  into the base's row and judges it by the libraries in those pieces, and
+  AndroidPak stages the matching split's native libraries with the base's
+  manifest and assets. Backend: `androidPakScanZip`, `androidPakSplitPeers`,
+  `inspectAndroidPak` and the split-aware staging and memory footprint in
+  `androidpak.go`, `apkStoreGroupSplits` and `SplitCount` in
+  `apkstore_scan.go`; tests in `androidpak_splits_test.go` cover a base whose
+  library lives in its split (inspection and the staged bytes), a split of
+  another version being ignored, and the store folding the pieces into one
+  addable row while an orphaned piece keeps its own. Not checked: a real App
+  Bundle install on a handheld, a split inside an `.apks`/`.xapk` bundle, or a
+  split whose manifest omits the version code.
+
 - The Live Builder proves each request with a signature, never the pairing code
   (SEC-19): the browser signs the method, path, body digest, timestamp and a
   one-time nonce with an HMAC-SHA256 keyed by the code; the device refuses a
@@ -915,6 +1015,7 @@ what the About screen and the updater read.
 
 ### Changed
 
+- The first YouTube extraction attempt now requires a format with sound too: a higher-ranked video-only MP4 can no longer leave a clip silent. The same requirement is asserted by a test for both site and YouTube selectors.
 - A cut-off Windows emulator download now resumes from its `.part` with a Range request, keeps the part if the network dies again, and uses one part per release so a nightly tail cannot be appended to a stable archive. Range/Content-Range decisions are pure helpers with tests (DESK-12, partial).
 - Windows builds carry a VERSIONINFO resource from `jukaconfig.json`; `packaging/windows/generate.py` renders the same resource plus an Inno Setup script and winget/Scoop manifests from the release's SHA-256, with `make test-packaging` checking the generator (DESK-4, partial).
 - Juka's voice has its own volume setting, logs how much of the first word was waiting for Groq versus the device, and remembers a 400/404 missing speech model for the rest of the run instead of retrying it (SND-14, partial).

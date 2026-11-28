@@ -399,6 +399,16 @@ func ssyncRenderHome(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fra
 	addRow("export", tbxRowSpec{icon: "upload", title: "Export encrypted saves", subtitle: m.exportSub, pill: "Export", tone: tbxToneNeutral})
 	addRow("import", tbxRowSpec{icon: "download", title: "Import a saves file", subtitle: m.importSub, pill: "Import", tone: tbxToneNeutral})
 
+	if wd := webdavSettingsGet(); wd.connected() {
+		y += 14
+		tbxDrawSection(renderer, config, "WebDAV snapshots", "backup", x, top+y, w)
+		y += tbxSectionHeight
+		addRow("snapUpload", tbxRowSpec{icon: "upload", title: "Save a snapshot",
+			subtitle: "One encrypted version on " + wd.label() + " — earlier versions are kept", pill: "Upload", tone: tbxToneNeutral})
+		addRow("snapRestore", tbxRowSpec{icon: "download", title: "Restore a snapshot",
+			subtitle: "Choose one on " + wd.label() + ", then see what goes back before it changes", pill: "Restore", tone: tbxToneNeutral})
+	}
+
 	y += 14
 	addRow("manager", tbxRowSpec{icon: "backup", title: "Save Manager",
 		subtitle: "Every sync and import snapshots the saves it replaces first — restore one here"})
@@ -560,6 +570,10 @@ func ssyncScreenHints() []FooterHint {
 		hints = append(hints, FooterHint{Button: "A", Label: "Compare"})
 	case id == "export":
 		hints = append(hints, FooterHint{Button: "A", Label: "Export"})
+	case id == "snapUpload":
+		hints = append(hints, FooterHint{Button: "A", Label: "Upload"})
+	case id == "snapRestore":
+		hints = append(hints, FooterHint{Button: "A", Label: "Choose"})
 	case id == "import", strings.HasPrefix(id, "file:"):
 		hints = append(hints, FooterHint{Button: "A", Label: "Open"})
 	case id == "manager":
@@ -605,6 +619,12 @@ func ssyncActivate(config *Config, id string) {
 	case id == "import":
 		PlayActivateSound()
 		ssyncOpenImport()
+	case id == "snapUpload":
+		PlayActivateSound()
+		ssyncAskSnapshotUploadPassphrase(config)
+	case id == "snapRestore":
+		PlayActivateSound()
+		ssyncStartSnapshotList(config)
 	case strings.HasPrefix(id, "file:"):
 		n, err := strconv.Atoi(strings.TrimPrefix(id, "file:"))
 		if err != nil || n < 0 || n >= len(ssyncScreen.bundles) {
@@ -912,7 +932,7 @@ func ssyncStartPreview(config *Config, b ssyncBundleInfo, passphrase string) {
 				ShowToast(ssyncImportErrorText(err), ToastKindWarning)
 				return
 			}
-			ssyncOpenPreviewSheet(config, prev, passphrase)
+			ssyncOpenPreviewSheet(config, prev, passphrase, false)
 		})
 	}()
 }
@@ -932,13 +952,16 @@ func ssyncImportErrorText(err error) string {
 	return "Could not read the file: " + firstLine(err.Error())
 }
 
-// ssyncOpenPreviewSheet shows what an import would change.
-func ssyncOpenPreviewSheet(config *Config, prev ssyncImportPreview, passphrase string) {
+// ssyncOpenPreviewSheet shows what an import — or a snapshot restore, which
+// puts the file's versions back instead of merging them — would change.
+func ssyncOpenPreviewSheet(config *Config, prev ssyncImportPreview, passphrase string, restore bool) {
 	plan := prev.Plan
 	when := prev.Header.Created
 	if t, err := time.Parse(time.RFC3339, when); err == nil {
 		when = formatDateTime(config, t.Local())
 	}
+	title := "Import saves from " + prev.From + "?"
+	icon, action := "download", "Import"
 	body := "## In this file\n" + strconv.Itoa(len(prev.Bundle.Files)) + " saves from " + prev.From + ", exported " + when + "\n\n" +
 		"## What changes here\n" +
 		"• " + strconv.Itoa(plan.Pull) + " new or newer saves are copied in\n" +
@@ -946,21 +969,221 @@ func ssyncOpenPreviewSheet(config *Config, prev ssyncImportPreview, passphrase s
 		"• " + strconv.Itoa(prev.Kept) + " stay as they are: newer here, or already kept\n" +
 		"• " + strconv.Itoa(len(plan.Same)) + " are already the same\n\n" +
 		"Every save it replaces goes into a Save Manager snapshot first."
+	if restore {
+		title, icon, action = "Restore this snapshot?", "backup", "Restore"
+		body = "## In this snapshot\n" + strconv.Itoa(len(prev.Bundle.Files)) + " saves from " + prev.From + ", taken " + when + "\n\n" +
+			"## What changes here\n" +
+			"• " + strconv.Itoa(plan.Pull) + " saves go back to this snapshot's version\n" +
+			"• " + strconv.Itoa(len(plan.Same)) + " are already the same\n" +
+			"• saves this snapshot does not hold stay as they are\n\n" +
+			"Every save it replaces goes into a Save Manager snapshot first."
+	}
 	if len(plan.Skipped) > 0 {
 		body += "\n\n" + pluralizeCount(len(plan.Skipped), "save is", "saves are") + " left out: this device has no such save folder."
 	}
 	buttons := []tbxSheetButton{{label: "Cancel"}}
 	if len(plan.Items) > 0 {
-		buttons = append(buttons, tbxSheetButton{label: "Import", primary: true, run: func() { ssyncStartImport(prev, passphrase) }})
+		buttons = append(buttons, tbxSheetButton{label: action, primary: true, run: func() {
+			if restore {
+				ssyncStartRestore(prev, passphrase)
+				return
+			}
+			ssyncStartImport(prev, passphrase)
+		}})
 	}
 	tbxOpenSheet(config, tbxSheetSpec{
-		title:    "Import saves from " + prev.From + "?",
+		title:    title,
 		subtitle: filepath.Base(prev.Path),
-		icon:     "download",
+		icon:     icon,
 		body:     body,
 		buttons:  buttons,
 		focus:    len(buttons) - 1,
 	})
+}
+
+// ssyncStartRestore puts a downloaded snapshot's saves back through the same
+// merge an import uses, with the snapshot as the state to return to.
+func ssyncStartRestore(prev ssyncImportPreview, passphrase string) {
+	ctx, ok := ssyncWorkStart("Restoring " + filepath.Base(prev.Path) + "…")
+	if !ok {
+		return
+	}
+	go func() {
+		res, err := ssyncImportApply(ctx, prev, passphrase, saveManagerRoots(), ssyncWorkProgress)
+		tbxPost(func() {
+			ssyncWorkEnd()
+			ssyncScreen.mode = ssyncModeHome
+			ssyncScreen.nav.focus, ssyncScreen.nav.scroll = "", 0
+			ssyncScreen.model.builtAt = time.Time{}
+			if err != nil {
+				ShowToast(ssyncImportErrorText(err), ToastKindWarning)
+				return
+			}
+			ssyncScreen.resultLine = "Restored " + filepath.Base(prev.Path) + ": " + ssyncResultText(res)
+			kind := ToastKindSuccess
+			if res.Failed > 0 {
+				kind = ToastKindWarning
+			}
+			ShowToast("Snapshot restored · "+ssyncResultText(res), kind)
+		})
+	}()
+}
+
+// ── WebDAV snapshots (SYS-19) ─────────────────────────────────────────────
+
+// ssyncAskSnapshotUploadPassphrase asks for the passphrase of a new version.
+func ssyncAskSnapshotUploadPassphrase(config *Config) {
+	tbxOpenPrompt("Snapshot passphrase", "At least 8 characters — you type it again to restore", "", func(text string) {
+		if len([]rune(text)) < ssyncMinPassphrase {
+			ShowToast(fmt.Sprintf("Use at least %d characters", ssyncMinPassphrase), ToastKindWarning)
+			return
+		}
+		ssyncStartSnapshotUpload(config, text)
+	})
+}
+
+// ssyncStartSnapshotUpload writes one encrypted version to the server.
+func ssyncStartSnapshotUpload(config *Config, passphrase string) {
+	ctx, ok := ssyncWorkStart("Saving a snapshot…")
+	if !ok {
+		return
+	}
+	go func() {
+		conn, err := webdavConnFrom(webdavSettingsGet())
+		var snap webdavSnapshot
+		if err == nil {
+			snap, err = webdavSnapshotUpload(ctx, conn, saveManagerRoots(), passphrase, time.Now(), func(done, total int) {
+				ssyncWorkProgress(done, total, "")
+			})
+		}
+		tbxPost(func() {
+			ssyncWorkEnd()
+			ssyncScreen.model.builtAt = time.Time{}
+			if err != nil {
+				if errors.Is(err, errSaveManagerEmpty) {
+					ShowToast("No saves to snapshot yet — play a game first", ToastKindInfo)
+					return
+				}
+				ShowToast("Snapshot failed: "+firstLine(err.Error()), ToastKindError)
+				return
+			}
+			ssyncScreen.resultLine = "Saved a snapshot on " + webdavSettingsGet().label()
+			PlaySuccessSound()
+			tbxOpenSheet(config, tbxSheetSpec{
+				title:    "Snapshot saved",
+				subtitle: snap.Name,
+				icon:     "upload",
+				body: "## On the server\n" + webdavSettingsGet().label() + "\n\n" +
+					"It holds every save, encrypted with your passphrase. Earlier versions are untouched; " +
+					"Restore a snapshot lists them, newest first.",
+				buttons: []tbxSheetButton{{label: "Done", primary: true}},
+			})
+		})
+	}()
+}
+
+// ssyncStartSnapshotList asks the server for its versions and offers the
+// newest few.
+func ssyncStartSnapshotList(config *Config) {
+	ctx, ok := ssyncWorkStart("Looking for snapshots…")
+	if !ok {
+		return
+	}
+	go func() {
+		conn, err := webdavConnFrom(webdavSettingsGet())
+		var list []webdavSnapshot
+		if err == nil {
+			list, err = webdavSnapshotList(ctx, conn)
+		}
+		tbxPost(func() {
+			ssyncWorkEnd()
+			if err != nil {
+				ShowToast("Snapshots: "+firstLine(err.Error()), ToastKindError)
+				return
+			}
+			if len(list) == 0 {
+				ShowToast("No snapshots on "+webdavSettingsGet().label()+" yet", ToastKindInfo)
+				return
+			}
+			buttons := []tbxSheetButton{{label: "Cancel"}}
+			for i, s := range list {
+				if i >= 4 {
+					break
+				}
+				s := s
+				buttons = append(buttons, tbxSheetButton{label: webdavSnapshotSummary(s), run: func() {
+					ssyncStartSnapshotFetch(config, s)
+				}})
+			}
+			tbxOpenSheet(config, tbxSheetSpec{
+				title:    "Restore a snapshot",
+				subtitle: webdavSettingsGet().label(),
+				icon:     "download",
+				body:     "The newest is first. Nothing changes until you type the snapshot's passphrase and confirm the import preview.",
+				buttons:  buttons,
+				focus:    len(buttons) - 1,
+			})
+		})
+	}()
+}
+
+// ssyncStartSnapshotFetch downloads one version, then asks for its passphrase
+// and shows the preview.
+func ssyncStartSnapshotFetch(config *Config, snap webdavSnapshot) {
+	ctx, ok := ssyncWorkStart("Downloading " + snap.Name + "…")
+	if !ok {
+		return
+	}
+	go func() {
+		conn, err := webdavConnFrom(webdavSettingsGet())
+		var path string
+		if err == nil {
+			path, err = webdavSnapshotFetch(ctx, conn, snap.Name, ssyncExportDir())
+		}
+		tbxPost(func() {
+			ssyncWorkEnd()
+			if err != nil {
+				ShowToast("Snapshot: "+firstLine(err.Error()), ToastKindError)
+				return
+			}
+			ssyncAskSnapshotPassphrase(config, path)
+		})
+	}()
+}
+
+// ssyncAskSnapshotPassphrase asks for a downloaded snapshot's passphrase, then
+// previews the restore.
+func ssyncAskSnapshotPassphrase(config *Config, path string) {
+	tbxOpenPrompt("Snapshot passphrase", "The one chosen when it was saved", "", func(text string) {
+		if text == "" {
+			return
+		}
+		ssyncStartSnapshotPreview(config, path, text)
+	})
+}
+
+// ssyncStartSnapshotPreview reads the snapshot's list and shows the preview,
+// with a wrong passphrase failing here and nothing written.
+func ssyncStartSnapshotPreview(config *Config, path, passphrase string) {
+	ctx, ok := ssyncWorkStart("Reading the snapshot…")
+	if !ok {
+		return
+	}
+	go func() {
+		prev, err := webdavSnapshotPreview(ctx, path, passphrase, saveManagerRoots())
+		tbxPost(func() {
+			ssyncWorkEnd()
+			if err != nil {
+				if errors.Is(err, errSsyncAuth) {
+					ShowToast("Wrong passphrase — or the file was changed or damaged", ToastKindWarning)
+					return
+				}
+				ShowToast(ssyncImportErrorText(err), ToastKindWarning)
+				return
+			}
+			ssyncOpenPreviewSheet(config, prev, passphrase, true)
+		})
+	}()
 }
 
 // ssyncStartImport merges the file in the background.

@@ -685,8 +685,12 @@ func radioNowAction() string {
 	return np.action()
 }
 
-// radioNowTitle is a Now playing row's title: the track's name, else its link's.
+// radioNowTitle is a Now playing row's title: the station's ICY title while it
+// reports one, else the track's name, else its link's.
 func radioNowTitle(np musicNowState) string {
+	if t := radioDirOneLine(np.stationTitle, 80); t != "" {
+		return t
+	}
 	if t := radioDirOneLine(np.title, 80); t != "" {
 		return t
 	}

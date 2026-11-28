@@ -42,7 +42,25 @@ const (
 	gameOptionsRowArgs
 	gameOptionsRowOpenIn
 	gameOptionsRowCheats
-	gameOptionsRowButtons    // racontrols_ui.go
+	gameOptionsRowButtons // racontrols_ui.go
+	// The game's own per-button map, one row per RetroPad button
+	// (racontrols_map.go), in RetroPad order.
+	gameOptionsRowMapB
+	gameOptionsRowMapY
+	gameOptionsRowMapSelect
+	gameOptionsRowMapStart
+	gameOptionsRowMapUp
+	gameOptionsRowMapDown
+	gameOptionsRowMapLeft
+	gameOptionsRowMapRight
+	gameOptionsRowMapA
+	gameOptionsRowMapX
+	gameOptionsRowMapL
+	gameOptionsRowMapR
+	gameOptionsRowMapL2
+	gameOptionsRowMapR2
+	gameOptionsRowMapL3
+	gameOptionsRowMapR3
 	gameOptionsRowCtrlLayout // ctrllayout_ui.go
 	gameOptionsRowTurbo      // racontrols_ui.go
 	gameOptionsRowHotkey     // rahotkeys_ui.go: which shortcut
@@ -120,7 +138,18 @@ var gameOptsUI struct {
 // It is separate from gameOptsUI.opts so a dismissed keyboard changes nothing.
 var gameArgsBuffer string
 
+// gameOptionsMapButtonIndex is the RetroPad button a map row edits, or -1.
+func gameOptionsMapButtonIndex(row int) int {
+	if row < gameOptionsRowMapB || row > gameOptionsRowMapR3 {
+		return -1
+	}
+	return row - gameOptionsRowMapB
+}
+
 func gameOptionsRowName(row int) string {
+	if i := gameOptionsMapButtonIndex(row); i >= 0 {
+		return "Button " + strings.ToUpper(raRemapButtonNames[i])
+	}
 	switch row {
 	case gameOptionsRowTitle:
 		return "Rename title"
@@ -205,6 +234,9 @@ func gameOptionsNoCover() bool {
 // gameOptionsRowHint is the second line under a row label, explaining what the
 // value does rather than repeating it.
 func gameOptionsRowHint(row int) string {
+	if i := gameOptionsMapButtonIndex(row); i >= 0 {
+		return "What RetroArch's core gets when you press it · Automatic keeps the Buttons choice"
+	}
 	switch row {
 	case gameOptionsRowTitle:
 		return "Shown in the library; the ROM file keeps its name"
@@ -300,6 +332,9 @@ func gameOptionsRowHint(row int) string {
 
 // gameOptionsRowValue is the right-hand value of a row.
 func gameOptionsRowValue(row int, opts gameOptions) string {
+	if i := gameOptionsMapButtonIndex(row); i >= 0 {
+		return gameButtonsMapSheetValue(gameOptsUI.game, raRemapButtonNames[i])
+	}
 	switch row {
 	case gameOptionsRowTitle:
 		if title := strings.TrimSpace(gameOptsUI.game.DisplayTitle); title != "" {
@@ -756,7 +791,15 @@ func adjustGameOptions(delta int) {
 	if delta == 0 || gameOptsUI.choice != gameOptionsChoiceNone {
 		return
 	}
-	switch gameOptionsRowAt(gameOptsUI.cursor) {
+	row := gameOptionsRowAt(gameOptsUI.cursor)
+	if i := gameOptionsMapButtonIndex(row); i >= 0 {
+		// Left/Right stop at the ends; A wraps (racontrols_map.go).
+		if gameButtonsMapStepFor(gameOptsUI.game, raRemapButtonNames[i], delta, false) {
+			PlayNavSound()
+		}
+		return
+	}
+	switch row {
 	case gameOptionsRowDisc:
 		if !discOptionsStep(delta) {
 			return
@@ -863,7 +906,15 @@ func activateGameOptionsRow() {
 		activateGameOptionsChoice()
 		return
 	}
-	switch gameOptionsRowAt(gameOptsUI.cursor) {
+	row := gameOptionsRowAt(gameOptsUI.cursor)
+	if i := gameOptionsMapButtonIndex(row); i >= 0 {
+		// A goes round, so one button reaches every target.
+		if gameButtonsMapStepFor(gameOptsUI.game, raRemapButtonNames[i], 1, true) {
+			PlayNavSound()
+		}
+		return
+	}
+	switch row {
 	case gameOptionsRowTitle:
 		vkOpenGameTitle()
 	case gameOptionsRowFileName:
@@ -1314,6 +1365,9 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 		if buttonsRow && gameControlsSheetOwn(gameOptsUI.game, idx == gameOptionsRowTurbo) {
 			valueColor = focusColor
 		}
+		if i := gameOptionsMapButtonIndex(idx); i >= 0 && gameButtonsMapSheetOwn(gameOptsUI.game, raRemapButtonNames[i]) {
+			valueColor = focusColor
+		}
 		if idx == gameOptionsRowCtrlLayout && ctrlLayoutSheetOwn(gameOptsUI.game) {
 			valueColor = focusColor
 		}
@@ -1326,7 +1380,7 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 		// Ladders and toggles show which way they move; a static value would
 		// leave Left/Right undiscoverable.
-		if selected && (buttonsRow || idx == gameOptionsRowCeiling || idx == gameOptionsRowCPUProfile ||
+		if selected && (buttonsRow || gameOptionsMapButtonIndex(idx) >= 0 || idx == gameOptionsRowCeiling || idx == gameOptionsRowCPUProfile ||
 			idx == gameOptionsRowVideo || idx == gameOptionsRowSort || idx == gameOptionsRowLayout ||
 			idx == gameOptionsRowConsoleLook || idx == gameOptionsRowShowHidden || idx == gameOptionsRowHidden ||
 			idx == gameOptionsRowEmulator || raSheetRow(idx) || extrasRow) {

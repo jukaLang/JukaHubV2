@@ -83,6 +83,9 @@ type apkStoreInfo struct {
 	// IconTried reports that the icon was looked for; an analysis made after
 	// the scan's icon budget ran out is read again for its icon next time.
 	IconTried bool
+	// SplitCount is how many split_config APKs this base APK's row folds in
+	// (apkStoreGroupSplits): one app, one row.
+	SplitCount int
 }
 
 // apkStoreCache remembers analyses by path; an entry is valid while the file's
@@ -307,9 +310,64 @@ func apkStoreScan(ctx context.Context, roots []string, progress func(done, total
 			progress(i+1, len(files))
 		}
 	}
+	res.apks = apkStoreGroupSplits(res.apks)
 	apkStoreSort(res.apks)
 	res.took = time.Since(start)
 	return res
+}
+
+// apkStoreGroupSplits folds split_config APKs into the base APK's row when the
+// manifests name the same package and version in the same folder: the pieces
+// are one app, so the store lists it once, and the base's row says how many
+// pieces it has. A split without its base, or a piece of another version,
+// keeps its own row and its own verdict.
+func apkStoreGroupSplits(infos []apkStoreInfo) []apkStoreInfo {
+	if len(infos) < 2 {
+		return infos
+	}
+	keyOf := func(info apkStoreInfo) string {
+		return filepath.Dir(info.Path) + "\x00" + info.Manifest.Package + "\x00" + strconv.FormatInt(info.Manifest.VersionCode, 10)
+	}
+	bases := map[string]int{}
+	for i, info := range infos {
+		if info.Manifest.Split != "" || strings.TrimSpace(info.Manifest.Package) == "" {
+			continue
+		}
+		k := keyOf(info)
+		if _, ok := bases[k]; !ok {
+			bases[k] = i
+		}
+	}
+	if len(bases) == 0 {
+		return infos
+	}
+	folded := map[int]int{}
+	drop := make([]bool, len(infos))
+	for i, info := range infos {
+		if info.Manifest.Split == "" || strings.TrimSpace(info.Manifest.Package) == "" {
+			continue
+		}
+		bi, ok := bases[keyOf(info)]
+		if !ok || bi == i {
+			continue
+		}
+		drop[i] = true
+		folded[bi]++
+	}
+	if len(folded) == 0 {
+		return infos
+	}
+	out := make([]apkStoreInfo, 0, len(infos))
+	for i, info := range infos {
+		if drop[i] {
+			continue
+		}
+		if n := folded[i]; n > 0 {
+			info.SplitCount = n
+		}
+		out = append(out, info)
+	}
+	return out
 }
 
 // apkStoreSort orders the list: what can be tried first, then by name.
@@ -476,6 +534,12 @@ func apkStoreAnalyze(p string, withIcon bool) (info apkStoreInfo) {
 	if terr != nil {
 		info.TriageErr = terr.Error()
 	} else {
+		// The base and its pieces are one app: the libraries triage found in
+		// the split_config APKs beside it are the app's own. Only a base
+		// still missing its pieces stays "one piece of a split APK".
+		if len(libs.Splits) > 0 && m.Split == "" {
+			splitsRequired = false
+		}
 		info.ChosenABI, info.EntryLib = libs.Chosen, libs.MainLib
 		prefix := "lib/" + libs.Chosen + "/"
 		for name, f := range byName {

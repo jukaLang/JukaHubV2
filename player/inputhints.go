@@ -60,6 +60,26 @@ const (
 	hintVocabKeyboard
 )
 
+// hintPadStyleKey is the Custom setting behind Settings → Controls → Pad
+// style: which family's printed names the hints use.
+const hintPadStyleKey = "padStyle"
+
+const (
+	hintPadStyleAuto        = "auto"
+	hintPadStyleXbox        = "xbox"
+	hintPadStylePlayStation = "playstation"
+	hintPadStyleNintendo    = "nintendo"
+)
+
+// hintPadFamily is the printed vocabulary of the pad the hints name.
+type hintPadFamily uint8
+
+const (
+	hintPadFamilyXbox hintPadFamily = iota
+	hintPadFamilyPlayStation
+	hintPadFamilyNintendo
+)
+
 // hintUsed is the device pressed last since the connected set last changed.
 type hintUsed uint8
 
@@ -82,6 +102,10 @@ var inputHints struct {
 // hintKeyboardNow is the vocabulary of the current frame, published by
 // inputHintsTick. Draw code on any goroutine reads it.
 var hintKeyboardNow atomic.Bool
+
+// hintPadFamilyNow is the family whose printed names the pad badges use this
+// frame, published by inputHintsTick like the vocabulary above.
+var hintPadFamilyNow atomic.Int32
 
 // hintExternalKeyboard is set by the Linux watcher while a real keyboard (USB
 // or Bluetooth) is attached to the handheld.
@@ -156,6 +180,7 @@ func inputHintsTick(config *Config) {
 	// The badges name the buttons Accessibility's remap now puts the actions
 	// on (INP-4).
 	hintRemapRefresh()
+	hintPadFamilyPublish(config)
 	handheld := hintOnHandheld()
 	if !inputHints.ready && handheld {
 		// The first look is synchronous so the first frame is already right;
@@ -323,20 +348,24 @@ func hintKeyIn(button, label string, v hintVocab, remap *hintPadRemap) string {
 	hintCache.mu.Lock()
 	out, ok := hintCache.m[key]
 	hintCache.mu.Unlock()
-	if ok {
-		return out
+	if !ok {
+		brick := brickHasFunctionKeys()
+		out = hintTranslate(button, key.v, key.ctx, !hintOnHandheld(), brick)
+		if remap != nil {
+			out = hintRemapPads(out, key.v, brick, remap.pairs)
+		}
+		hintCache.mu.Lock()
+		if hintCache.m == nil || len(hintCache.m) >= hintCacheMax {
+			hintCache.m = make(map[hintCacheKey]string, 64)
+		}
+		hintCache.m[key] = out
+		hintCache.mu.Unlock()
 	}
-	brick := brickHasFunctionKeys()
-	out = hintTranslate(button, key.v, key.ctx, !hintOnHandheld(), brick)
-	if remap != nil {
-		out = hintRemapPads(out, key.v, brick, remap.pairs)
+	// The family is applied after the cache: switching Pad style must show on
+	// the next frame, not the next cache reset.
+	if v == hintVocabPad {
+		out = hintPadFamilyBadge(out, hintPadFamily(hintPadFamilyNow.Load()))
 	}
-	hintCache.mu.Lock()
-	if hintCache.m == nil || len(hintCache.m) >= hintCacheMax {
-		hintCache.m = make(map[hintCacheKey]string, 64)
-	}
-	hintCache.m[key] = out
-	hintCache.mu.Unlock()
 	return out
 }
 
@@ -1101,5 +1130,191 @@ func hintSetMode(c *Config, value string) {
 		value = hintModeAuto
 	}
 	setStoreString(c, hintModeKey, value)
+	inputHintsTick(c)
+}
+
+// ── Pad style ───────────────────────────────────────────────────────────────
+
+// hintPadFamilyPublish picks this frame's family: the setting, or in Auto the
+// connected pad's name. The handheld's own pad prints Xbox names.
+func hintPadFamilyPublish(config *Config) {
+	name := ""
+	if !hintOnHandheld() && gameController != nil && gameController.Attached() {
+		name = gameController.Name()
+	}
+	fam := hintPadFamilyFor(config, name)
+	if hintPadFamilyNow.Load() != int32(fam) {
+		hintPadFamilyNow.Store(int32(fam))
+	}
+}
+
+// hintPadStyleOf reads the Pad style setting; anything unknown is Auto.
+func hintPadStyleOf(c *Config) string {
+	if c == nil || c.Variables.Custom == nil {
+		return hintPadStyleAuto
+	}
+	v, ok := c.Variables.Custom[hintPadStyleKey].(string)
+	if !ok {
+		return hintPadStyleAuto
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case hintPadStyleXbox:
+		return hintPadStyleXbox
+	case hintPadStylePlayStation:
+		return hintPadStylePlayStation
+	case hintPadStyleNintendo:
+		return hintPadStyleNintendo
+	}
+	return hintPadStyleAuto
+}
+
+// hintPadFamilyFor resolves the family: the stored style, or in Auto the
+// pad's name (an unnamed or Xbox-style pad keeps the Xbox names).
+func hintPadFamilyFor(c *Config, padName string) hintPadFamily {
+	switch hintPadStyleOf(c) {
+	case hintPadStyleXbox:
+		return hintPadFamilyXbox
+	case hintPadStylePlayStation:
+		return hintPadFamilyPlayStation
+	case hintPadStyleNintendo:
+		return hintPadFamilyNintendo
+	}
+	return hintPadFamilyForName(padName)
+}
+
+// hintPadFamilyForName guesses a family from the controller's SDL name. Sony
+// and Nintendo pads name themselves; everything else, the handheld's own pad
+// included, prints Xbox-style buttons.
+func hintPadFamilyForName(name string) hintPadFamily {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case strings.Contains(n, "playstation"), strings.Contains(n, "dualshock"),
+		strings.Contains(n, "dualsense"), strings.Contains(n, "sony"),
+		strings.Contains(n, "ps3"), strings.Contains(n, "ps4"), strings.Contains(n, "ps5"):
+		return hintPadFamilyPlayStation
+	case strings.Contains(n, "nintendo"), strings.Contains(n, "switch"),
+		strings.Contains(n, "joy-con"), strings.Contains(n, "joycon"):
+		return hintPadFamilyNintendo
+	}
+	return hintPadFamilyXbox
+}
+
+// hintPadFamilyBadge renames a pad badge to the family's printing. A "Hold "
+// prefix, a chord ("Select + R1") and alternatives ("A / B") keep their words
+// while each known button is renamed; anything else, such as the keyboard pair
+// "A/D", is left alone. Pure.
+func hintPadFamilyBadge(badge string, fam hintPadFamily) string {
+	if fam == hintPadFamilyXbox || badge == "" {
+		return badge
+	}
+	if rest, ok := strings.CutPrefix(badge, "Hold "); ok {
+		return "Hold " + hintPadFamilyBadge(rest, fam)
+	}
+	sep := ""
+	switch {
+	case strings.Contains(badge, " + "):
+		sep = " + "
+	case strings.Contains(badge, " / "):
+		sep = " / "
+	}
+	if sep == "" {
+		return hintPadFamilyToken(badge, fam)
+	}
+	parts := strings.Split(badge, sep)
+	for i := range parts {
+		parts[i] = hintPadFamilyToken(parts[i], fam)
+	}
+	return strings.Join(parts, sep)
+}
+
+// hintPadFamilyToken renames one button label when the family prints it
+// differently. Pure.
+func hintPadFamilyToken(label string, fam hintPadFamily) string {
+	switch fam {
+	case hintPadFamilyPlayStation:
+		switch label {
+		case "A":
+			return "✕"
+		case "B":
+			return "○"
+		case "X":
+			return "□"
+		case "Y":
+			return "△"
+		}
+	case hintPadFamilyNintendo:
+		switch label {
+		case "A":
+			return "B"
+		case "B":
+			return "A"
+		case "X":
+			return "Y"
+		case "Y":
+			return "X"
+		case "L1":
+			return "L"
+		case "R1":
+			return "R"
+		case "L2":
+			return "ZL"
+		case "R2":
+			return "ZR"
+		}
+	}
+	return label
+}
+
+// hintPadStyleOptions are the stops of Settings → Controls → Pad style.
+func hintPadStyleOptions(*Config) []setOption {
+	return []setOption{
+		{Value: hintPadStyleAuto, Label: "Auto", Note: "Follow the connected pad's printed buttons"},
+		{Value: hintPadStyleXbox, Label: "Xbox", Note: "A B X Y with L1 / R1"},
+		{Value: hintPadStylePlayStation, Label: "PlayStation", Note: "✕ ○ □ △ with L1 / R1"},
+		{Value: hintPadStyleNintendo, Label: "Nintendo", Note: "B A Y X with L / R and ZL / ZR"},
+	}
+}
+
+// hintPadStyleCurrent is the index of the stored stop.
+func hintPadStyleCurrent(c *Config) int {
+	switch hintPadStyleOf(c) {
+	case hintPadStyleXbox:
+		return 1
+	case hintPadStylePlayStation:
+		return 2
+	case hintPadStyleNintendo:
+		return 3
+	}
+	return 0
+}
+
+// hintPadStyleDetail says which names the badges use now, so Auto is never a
+// mystery.
+func hintPadStyleDetail(c *Config) string {
+	if hintPadStyleOf(c) != hintPadStyleAuto {
+		return "Hints name the buttons as a " + hintPadFamilyLabel(hintPadFamilyFor(c, "")) + " pad prints them"
+	}
+	return "Auto · " + hintPadFamilyLabel(hintPadFamily(hintPadFamilyNow.Load())) + " button names"
+}
+
+// hintPadFamilyLabel is the setting's name for a family.
+func hintPadFamilyLabel(f hintPadFamily) string {
+	switch f {
+	case hintPadFamilyPlayStation:
+		return "PlayStation"
+	case hintPadFamilyNintendo:
+		return "Nintendo"
+	}
+	return "Xbox"
+}
+
+// hintSetPadStyle stores the setting and applies it on the next frame.
+func hintSetPadStyle(c *Config, value string) {
+	switch value {
+	case hintPadStyleXbox, hintPadStylePlayStation, hintPadStyleNintendo:
+	default:
+		value = hintPadStyleAuto
+	}
+	setStoreString(c, hintPadStyleKey, value)
 	inputHintsTick(c)
 }

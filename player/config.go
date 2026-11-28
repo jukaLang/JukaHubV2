@@ -152,6 +152,10 @@ type SceneConfig struct {
 	Background  string    `json:"background"`
 	Layout      string    `json:"layout"`
 	Elements    []Element `json:"elements"`
+	// FocusOrder is the D-pad order of the scene's focusable elements, as
+	// element indices. The web builder writes it; an empty list keeps the
+	// player's old left-to-right, top-to-bottom order.
+	FocusOrder []int `json:"focusOrder,omitempty"`
 }
 
 // intOrString accepts a JSON number or a numeric string, so a config written by

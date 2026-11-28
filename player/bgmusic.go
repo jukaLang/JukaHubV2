@@ -278,6 +278,7 @@ func bgmSetPrefs(c *Config, on bool, source string, pct int) {
 // loop when there is something to play.
 func bgmTick(c *Config) {
 	bgmPickTick(c)
+	webPickTick(c)
 	bgmBind(c)
 	bgmMainHold.Store(screensaverAsleep() || powerSleepActive() || voiceOrbActive() ||
 		vkVoiceActive() || alarmFiringActive())

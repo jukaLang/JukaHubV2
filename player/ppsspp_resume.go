@@ -44,6 +44,9 @@ const (
 	// ppssppEnvState the state the launcher starts the game from.
 	ppssppEnvSaveTo = "JUKAHUB_PPSSPP_SAVE_TO"
 	ppssppEnvState  = "JUKAHUB_PPSSPP_STATE"
+	// ppssppEnvHome is the profile's PPSSPP home; the launcher falls back to
+	// the install's own when it is unset (the owner's launches).
+	ppssppEnvHome = "JUKAHUB_PPSSPP_HOME"
 	// ppssppResumeDirName is the folder for them in the managed root.
 	ppssppResumeDirName = "resume"
 	// ppssppResumeExt is a requested state's extension, PPSSPP's own.
@@ -158,6 +161,9 @@ func ppssppResumeEnv(launcher, romPath string, env []string) (out []string, chan
 		return env, false
 	}
 	out = env
+	if withHome, added := ppssppProfileHomeEnv(out); added {
+		out, changed = withHome, true
+	}
 	if to := ppssppResumeTargetFor(launcher, romPath); to != "" {
 		out = append(childEnvWithout(out, ppssppEnvSaveTo), ppssppEnvSaveTo+"="+to)
 		changed = true
@@ -168,6 +174,22 @@ func ppssppResumeEnv(launcher, romPath string, env []string) (out []string, chan
 		logInfo("ppsspp", "%s starts from the state JukaHub saved for it (%s)", filepath.Base(romPath), filepath.Base(state))
 	}
 	return out, changed
+}
+
+// ppssppProfileHomeEnv adds the playing profile's PPSSPP home, which the
+// managed launcher reads as its memstick and config folder. The owner's
+// launches are untouched.
+func ppssppProfileHomeEnv(env []string) ([]string, bool) {
+	a := profilesCurrent()
+	if a == nil || a.Dir == "" {
+		return env, false
+	}
+	home := profilesPPSSPPHome(a.Dir)
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		logWarn("ppsspp", "no folder for the profile's PPSSPP home: %v", err)
+		return env, false
+	}
+	return append(childEnvWithout(env, ppssppEnvHome), ppssppEnvHome+"="+home), true
 }
 
 // ppssppPrepareResumeLaunch is ppssppResumeEnv for a start beside JukaHub

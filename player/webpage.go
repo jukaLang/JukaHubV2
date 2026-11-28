@@ -21,6 +21,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -1753,6 +1754,11 @@ func (c *webControl) Display() string {
 		return ""
 	}
 	switch c.Kind {
+	case "file":
+		if v := strings.TrimSpace(c.Value); v != "" {
+			return " " + filepath.Base(v) + " "
+		}
+		return " Choose file "
 	case "text", "textarea":
 		if c.Secret && strings.TrimSpace(c.Value) != "" {
 			return " " + strings.Repeat("•", 8) + " "
@@ -14554,9 +14560,10 @@ func (p *webParser) addBreak() {
 // addControlFromInput turns an <input> into a run the reader draws and the
 // browser can fill. A text-ish field shows its value, or its placeholder as a
 // prompt, inside a field box; a tick box shows a drawn box; a submit shows its
-// label as the button it is. Hidden inputs and the types the reader cannot do
-// anything with (file pickers, colour wells, sliders) are still skipped, the
-// way every <input> was when they were all void tags.
+// label as the button it is; a file field shows the chosen file's name (or
+// asks for one). Hidden inputs and the types the reader cannot do anything
+// with (colour wells, sliders) are still skipped, the way every <input> was
+// when they were all void tags.
 func (p *webParser) addControlFromInput(attrs string, style webStyle) {
 	kind := strings.ToLower(strings.TrimSpace(htmlTagAttribute(attrs, "type")))
 	if kind == "" {
@@ -14604,6 +14611,12 @@ func (p *webParser) addControlFromInput(attrs string, style webStyle) {
 			Secret:      kind == "password",
 			Form:        p.form,
 		}
+		p.emitControl(ctrl, style, true)
+		return
+	case "file":
+		// The value is the local path the picker chose, not the markup's:
+		// browsers never let a page preselect a file, and neither does this.
+		ctrl := &webControl{Kind: "file", Name: name, Form: p.form}
 		p.emitControl(ctrl, style, true)
 		return
 	}

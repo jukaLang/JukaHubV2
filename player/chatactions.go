@@ -190,7 +190,7 @@ func chatSelectionActions(index int) []chatProfileAction {
 	if strings.TrimSpace(msg.Text) != "" {
 		actions = append(actions, chatProfileAction{label: "Copy", kind: "copy"})
 	}
-	if tab != chatTabAI && strings.TrimSpace(msg.Text) != "" {
+	if tab != chatTabAI && (strings.TrimSpace(msg.Text) != "" || chatMessageImageURL(msg) != "") {
 		actions = append(actions, chatProfileAction{label: "Ask Juka", kind: "ask"})
 	}
 	if tab != chatTabSaved {
@@ -454,6 +454,13 @@ func activateChatSelectionAction(kind string, config *Config) {
 	case "ask":
 		clearChatSelection()
 		question := "About this message from " + msg.Sender + ": \"" + chatQuoteSummary(msg.Text, 600) + "\""
+		if strings.TrimSpace(msg.Text) == "" {
+			question = jukaPictureQuestion
+		}
+		if chatMessageImageURL(msg) != "" {
+			chatAskJukaAboutMessage(config, msg, question)
+			return
+		}
 		if chatHasGroqKey() {
 			chatSelectTab(chatTabAI)
 		}

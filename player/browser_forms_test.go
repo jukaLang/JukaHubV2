@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -199,5 +200,101 @@ func TestBrowserPOSTRedirectKeepsBodyAndRefusesDowngrade(t *testing.T) {
 	to := httptest.NewRequest(http.MethodPost, "http://example.com/finish", nil)
 	if err := textBrowserRedirectPolicy(to, []*http.Request{from}); err == nil {
 		t.Fatal("HTTPS POST was allowed to redirect to plain HTTP")
+	}
+}
+
+// TestBrowserMultipartFormSendsAFile exercises the whole file path: a parsed
+// <input type=file>, a chosen local file, the multipart request and the local
+// server's view of its filename, bytes, other fields and cookies.
+func TestBrowserMultipartFormSendsAFile(t *testing.T) {
+	upload := filepath.Join(t.TempDir(), "upload.txt")
+	if err := os.WriteFile(upload, []byte("hello upload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var gotName, gotBody, gotField, gotCookie, gotSession string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/form":
+			http.SetCookie(w, &http.Cookie{Name: "start", Value: "ready", Path: "/"})
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, `<form method="POST" action="/upload" enctype="multipart/form-data"><input name="title"><input type="file" name="attachment"><button type="submit">Send</button></form>`)
+		case "/upload":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("parse multipart: %v", err)
+				return
+			}
+			file, hdr, err := r.FormFile("attachment")
+			if err != nil {
+				t.Errorf("attachment: %v", err)
+				return
+			}
+			defer file.Close()
+			body, _ := io.ReadAll(file)
+			gotName, gotBody = hdr.Filename, string(body)
+			gotField = r.FormValue("title")
+			if c, err := r.Cookie("start"); err == nil {
+				gotCookie = c.Value
+			}
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "sent", Path: "/"})
+			http.Redirect(w, r, "/done", http.StatusSeeOther)
+		case "/done":
+			if c, err := r.Cookie("session"); err == nil {
+				gotSession = c.Value
+			}
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, "<p>sent</p>")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := &http.Client{
+		Timeout:       5 * time.Second,
+		Jar:           newBrowserCookieJar(filepath.Join(t.TempDir(), "cookies.json")),
+		CheckRedirect: textBrowserRedirectPolicy,
+	}
+	ctx := context.Background()
+	formPage, err := fetchTextBrowserDocument(ctx, client, srv.URL+"/form")
+	if err != nil {
+		t.Fatalf("get form: %v", err)
+	}
+	doc := parseWebPage(string(formPage.Body), "", formPage.URL.String())
+	if doc == nil {
+		t.Fatal("form page did not parse")
+	}
+	const variable = "browser_form_file_test"
+	setBrowserDocument(variable, doc)
+	defer setBrowserDocument(variable, nil)
+	var form webForm
+	var fileCtrl *webControl
+	for _, ctrl := range browserFormControls(Element{Variable: variable}) {
+		switch ctrl.Kind {
+		case "submit":
+			form = ctrl.Form
+		case "file":
+			fileCtrl = ctrl
+		}
+	}
+	if fileCtrl == nil {
+		t.Fatal("file input did not parse")
+	}
+	fileCtrl.Value = upload
+	nav, err := browserFormNavigationFiles(form, formPage.URL.String(), url.Values{"title": {"A note"}}, map[string]string{fileCtrl.Name: upload})
+	if err != nil {
+		t.Fatalf("build upload: %v", err)
+	}
+	result, err := fetchTextBrowserDocumentRequest(ctx, client, nav)
+	if err != nil {
+		t.Fatalf("post upload: %v", err)
+	}
+	if result.URL.String() != srv.URL+"/done" {
+		t.Fatalf("landed on %s", result.URL)
+	}
+	if gotName != "upload.txt" || gotBody != "hello upload" {
+		t.Fatalf("server saw file %q %q", gotName, gotBody)
+	}
+	if gotField != "A note" || gotCookie != "ready" || gotSession != "sent" {
+		t.Fatalf("fields/cookies: title=%q start=%q session=%q", gotField, gotCookie, gotSession)
 	}
 }

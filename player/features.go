@@ -325,7 +325,11 @@ func feBack(config *Config) {
 	if feExtractJustClosed() {
 		return
 	}
-	// Picking background music or chat attachments, B cancels the pick.
+	// Picking background music, a browser file or chat attachments, B
+	// cancels the pick.
+	if webPickBack(config) {
+		return
+	}
 	if bgmPickBack(config) {
 		return
 	}
@@ -394,6 +398,10 @@ func feEnterFocused(config *Config) {
 		// Only a directory that really lives below the active location's root
 		// is entered; one that cannot be read opens with the reason shown.
 		filesEnterDir(config, entry)
+		return
+	}
+	// Picking a file for a browser form: A chooses a file; folders still open.
+	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == "fe_entries" && webPickFromFiles(config, entry) {
 		return
 	}
 	// Picking background music: A chooses an audio file; folders still open.

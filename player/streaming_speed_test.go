@@ -29,6 +29,16 @@ func TestSiteStreamAttemptsDoNotAskForYouTubeClients(t *testing.T) {
 	if !strings.Contains(args, "vcodec!=none][acodec!=none") {
 		t.Fatalf("site selector can pick a silent format: %q", args)
 	}
+	if !strings.Contains(siteStreamFormatSelector(720), "acodec!=none") {
+		t.Fatal("site selector lost its audio requirement")
+	}
+}
+
+func TestStreamFormatSelectorPrefersAudio(t *testing.T) {
+	sel := streamFormatSelector(720)
+	if !strings.HasPrefix(sel, "best[height<=720][ext=mp4][acodec!=none]/") {
+		t.Fatalf("YouTube's first format term can pick a silent MP4: %q", sel)
+	}
 }
 
 func TestSourceIsYouTube(t *testing.T) {

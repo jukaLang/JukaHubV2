@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"errors"
 	"hash/crc32"
 	"os"
 	"path/filepath"
@@ -118,11 +117,11 @@ UgBlAHQAcgBvAEEAcgBjAGgALwByAGEANgA0AC4AdAByAGkAbQB1AGkAAABSAGUAdAByAG8AQQBy
 AGMAaAAvAC4AcgBlAHQAcgBvAGEAcgBjAGgALwBjAG8AcgBlAHMALwBhAF8AbABpAGIAcgBlAHQA
 cgBvAC4AcwBvAAAAAAA=`
 
-// TestSevenZipBranchFilters pins the branch filters: every file of the ARM and
-// ARM64 blocks comes back whole and matches its CRC (a_libretro.so starts
-// 3,002 bytes into its block, inside an instruction), a read that stops
-// inside an instruction converts it whole first, the x86 filter is refused,
-// and the methods read as 7-Zip lists them.
+// TestSevenZipBranchFilters pins the branch filters: every file of the x86
+// BCJ, ARM and ARM64 blocks comes back whole and matches its CRC (a_libretro.so
+// starts 3,002 bytes into its block, inside an instruction), a read that stops
+// inside an instruction converts it whole first, and the methods read as
+// 7-Zip lists them.
 func TestSevenZipBranchFilters(t *testing.T) {
 	data, err := base64.StdEncoding.DecodeString(string(bytes.ReplaceAll([]byte(sevenZipBranchFixture), []byte("\n"), nil)))
 	if err != nil {
@@ -156,12 +155,6 @@ func TestSevenZipBranchFilters(t *testing.T) {
 			t.Errorf("%s: methods %q, want %q", e.Name, got, w.methods)
 		}
 		body, err := a.readHead(r, i, int(e.Size))
-		if e.Name == "Tools/flash.exe" {
-			if !errors.Is(err, errSevenZipUnsupported) {
-				t.Errorf("the x86 filter: %v, want errSevenZipUnsupported", err)
-			}
-			continue
-		}
 		if err != nil || uint64(len(body)) != e.Size || crc32.ChecksumIEEE(body) != e.CRC {
 			t.Errorf("%s came back as %d bytes, err %v", e.Name, len(body), err)
 		}

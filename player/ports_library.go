@@ -505,6 +505,11 @@ func launchPortLibraryGame(game libraryGame) error {
 	if c := portCompatForLauncher(game.Path); portCompatBlocked(c.State) && !portCompatIgnored(appConfig) {
 		return fmt.Errorf("it cannot run here: %s", setOr(c.Note, portCompatBadge(c.State)))
 	}
+	// A port keeps its saves in its own folder, shared by everyone who
+	// plays it here; a profile is told once, like a standalone emulator.
+	if held, err := profilesLaunchGate(game, game.Path); held || err != nil {
+		return err
+	}
 	name := strings.TrimSuffix(filepath.Base(game.Path), filepath.Ext(game.Path))
 	if privateGlibcPortNeedsRuntime(game.Path) && !privateGlibcReady() {
 		ShowToast("Downloading GreenOvercast's compatibility runtime…", ToastKindInfo)

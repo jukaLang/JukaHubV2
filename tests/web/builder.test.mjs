@@ -156,6 +156,37 @@ test('the editor produces a JSON-serializable config with scenes', () => {
   assert.ok(round.scenes && typeof round.scenes === 'object');
 });
 
+test('the inspector edits D-pad order and exports it for the player', () => {
+  const { window } = dom;
+  const snapshot = window.eval('captureWorkspace("focus-order-test")');
+  try {
+    const before = window.eval('focusOrderForScene(currentScene)');
+    window.addElement('button', 40, 40);
+    window.addElement('button', 40, 120);
+    window.eval('saveCurrentScene()');
+    window.eval("switchTab('focus-properties')");
+    const list = window.document.getElementById('focusOrderList');
+    const order = window.eval('focusOrderForScene(currentScene)');
+    assert.equal(order.length, before.length + 2, 'both new buttons are focusable');
+    assert.equal(list.children.length, order.length, 'every focusable element is listed');
+
+    const down = list.querySelector('button[data-focus-move="down"]');
+    assert.ok(down, 'the first row has a Down control');
+    assert.ok(down.getAttribute('aria-label'), 'the control is labelled');
+    down.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const expected = order.slice();
+    [expected[0], expected[1]] = [expected[1], expected[0]];
+    assert.deepEqual(window.eval('focusOrderForScene(currentScene)'), expected);
+    const scene = window.eval('currentScene');
+    const exported = window.buildEditorConfig().scenes.find(s => s.name === scene);
+    assert.deepEqual(exported.focusOrder, expected, 'the reordered list is exported');
+    assert.match(fs.readFileSync(path.join(root, 'player/config.go'), 'utf8'), /FocusOrder \[\]int/);
+  } finally {
+    window.eval("switchTab('element-properties')");
+    window.restoreSnapshot(snapshot);
+  }
+});
+
 test('clicking a Dynamic List element previews its items instead of throwing', () => {
   const { window } = dom;
   const el = window.document.createElement('div');

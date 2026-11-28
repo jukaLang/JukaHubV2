@@ -1083,6 +1083,10 @@ func sevenZipBranchFor(c sevenZipCoder) (func(b []byte, pc uint32) int, uint32, 
 	switch {
 	case bytes.Equal(c.id, []byte{0x0A}):
 		conv = sevenZipARM64
+	case bytes.Equal(c.id, []byte{0x03, 0x03, 0x01, 0x03}):
+		// x86 BCJ carries state from one instruction candidate to the next,
+		// so it is a fresh closure per folder read.
+		conv = sevenZipBCJ()
 	case bytes.Equal(c.id, []byte{0x03, 0x03, 0x05, 0x01}):
 		conv = sevenZipARM
 	case bytes.Equal(c.id, []byte{0x03, 0x03, 0x07, 0x01}):
@@ -1127,6 +1131,88 @@ func sevenZipARM64(b []byte, pc uint32) int {
 		}
 	}
 	return i
+}
+
+// sevenZipBCJAllowed and sevenZipBCJBit are xz's x86 filter tables: whether a
+// candidate is safe after the mask, and which byte of the target must still
+// look like a call's high byte.
+var (
+	sevenZipBCJAllowed = [8]bool{true, true, true, false, true, false, false, false}
+	sevenZipBCJBit     = [8]uint32{0, 1, 2, 2, 3, 3, 3, 3}
+)
+
+// sevenZipBCJMSByte reports the high byte of a relative call target, which is
+// 0x00 or 0xFF for one that stays inside this stream.
+func sevenZipBCJMSByte(b byte) bool { return b == 0x00 || b == 0xFF }
+
+// sevenZipBCJ returns the x86 BCJ filter's inverse, the same conversion xz's
+// FILTER_X86 and 7-Zip's BCJ use. It keeps its state across reads because a
+// candidate is judged by what preceded it; the reader feeds the unconverted
+// tail back in, so pc is the stream position of b[0] every time.
+func sevenZipBCJ() func(b []byte, pc uint32) int {
+	var prevMask, prevPos uint32
+	started := false
+	return func(b []byte, pc uint32) int {
+		if len(b) < 5 {
+			return 0
+		}
+		if !started {
+			prevPos = pc - 5
+			started = true
+		}
+		i := 0
+		limit := len(b) - 5
+		for i <= limit {
+			if op := b[i]; op != 0xE8 && op != 0xE9 {
+				i++
+				continue
+			}
+			offset := pc + uint32(i) - prevPos
+			prevPos = pc + uint32(i)
+			if offset > 5 {
+				prevMask = 0
+			} else {
+				for k := uint32(0); k < offset; k++ {
+					prevMask &= 0x77
+					prevMask <<= 1
+				}
+			}
+			ms := b[i+4]
+			if sevenZipBCJMSByte(ms) && sevenZipBCJAllowed[(prevMask>>1)&7] && (prevMask>>1) < 0x10 {
+				src := uint32(ms)<<24 | uint32(b[i+3])<<16 | uint32(b[i+2])<<8 | uint32(b[i+1])
+				var dest uint32
+				for {
+					dest = src - (pc + uint32(i) + 5)
+					if prevMask == 0 {
+						break
+					}
+					bit := sevenZipBCJBit[prevMask>>1]
+					ms = byte(dest >> (24 - bit*8))
+					if !sevenZipBCJMSByte(ms) {
+						break
+					}
+					if bit == 0 {
+						src = dest
+					} else {
+						src = dest ^ ((uint32(1) << (32 - bit*8)) - 1)
+					}
+				}
+				b[i+4] = byte(^(((dest >> 24) & 1) - 1))
+				b[i+3] = byte(dest >> 16)
+				b[i+2] = byte(dest >> 8)
+				b[i+1] = byte(dest)
+				i += 5
+				prevMask = 0
+			} else {
+				i++
+				prevMask |= 1
+				if sevenZipBCJMSByte(ms) {
+					prevMask |= 0x10
+				}
+			}
+		}
+		return i
+	}
 }
 
 // sevenZipARM undoes the ARM filter: BL's 24-bit target, in 4-byte steps.

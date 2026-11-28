@@ -17,9 +17,12 @@ import (
 	"bytes"
 	"fmt"
 	htmlstd "html"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +45,9 @@ const (
 
 	browserHistoryLimit = 40
 	browserLinkLimit    = 80
+	// browserUploadMax bounds one file a form sends: a page must not be able
+	// to read an arbitrarily large local file into memory on the SD card.
+	browserUploadMax = 32 << 20
 )
 
 type browserLink struct {
@@ -1722,6 +1728,19 @@ func browserActivatePageControl(renderer *sdl.Renderer, config *Config, elem Ele
 		browserRefreshFormState(elem)
 		PlayActivateSound()
 		return
+	case "file":
+		// A page cannot read a local path by itself: the pick goes through
+		// Files, and the chosen file stays on the control until the form is
+		// sent. A browser only uploads in a multipart POST; say so here, not
+		// after the user has picked a file the form cannot carry.
+		if !strings.EqualFold(ctrl.Form.Method, http.MethodPost) || ctrl.Form.Enctype != "multipart/form-data" {
+			showToast("This form cannot send a file", ToastWarn())
+			return
+		}
+		if webPickBegin(config, elem.Variable, ctrl) {
+			PlayActivateSound()
+		}
+		return
 	case "details":
 		// A section opens and closes in place, like a tick box: the body was
 		// parsed and kept, so this is a re-measure rather than a re-fetch.
@@ -1827,7 +1846,7 @@ func browserFormHasTypedValue(elem Element, form webForm) bool {
 		if ctrl.Form.ID != form.ID {
 			continue
 		}
-		if ctrl.Kind != "text" && ctrl.Kind != "textarea" {
+		if ctrl.Kind != "text" && ctrl.Kind != "textarea" && ctrl.Kind != "file" {
 			continue
 		}
 		if strings.TrimSpace(ctrl.Value) != "" {
@@ -1948,6 +1967,7 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 		return false
 	}
 	values := url.Values{}
+	files := map[string]string{}
 	// The page's own hidden inputs go first: they are the constants the site's
 	// handler expects (`ie=utf-8`, a site key, a locale). A visible field with
 	// the same name overwrites one below, because what the user typed is what
@@ -1987,6 +2007,10 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 				}
 				values.Set(name, v)
 			}
+		case "file":
+			if path := strings.TrimSpace(other.Value); path != "" {
+				files[name] = path
+			}
 		}
 	}
 	if button {
@@ -2005,7 +2029,13 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 		}
 		values.Set(name, typed)
 	}
-	if len(values) == 0 {
+	if len(values) == 0 && len(files) == 0 {
+		for _, other := range browserFormControls(elem) {
+			if other.Form.ID == form.ID && other.Kind == "file" {
+				showToast("Choose a file first", ToastInfo())
+				break
+			}
+		}
 		return false
 	}
 
@@ -2013,7 +2043,7 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 	if doc := browserDocumentFor(elem.Variable); doc != nil && strings.TrimSpace(doc.URL) != "" {
 		base = doc.URL
 	}
-	nav, err := browserFormNavigation(form, base, values)
+	nav, err := browserFormNavigationFiles(form, base, values, files)
 	if err != nil {
 		showToast("This form's address cannot be opened", ToastError())
 		return false
@@ -2025,6 +2055,76 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 	PlayActivateSound()
 	browserLoadNavigation(config, elem, nav, true, !post)
 	return true
+}
+
+// browserFormNavigationFiles is browserFormNavigation with the file inputs a
+// form carries, added as multipart parts. A file upload only goes in a
+// multipart POST, as a real browser sends it; the file is read here, bounded,
+// and only its base name is sent to the page.
+func browserFormNavigationFiles(form webForm, base string, values url.Values, files map[string]string) (browserNavigation, error) {
+	nav, err := browserFormNavigation(form, base, values)
+	if err != nil || len(files) == 0 {
+		return nav, err
+	}
+	if !strings.EqualFold(form.Method, http.MethodPost) || form.Enctype != "multipart/form-data" {
+		return browserNavigation{}, fmt.Errorf("file uploads need a multipart POST form")
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for _, name := range sortedKeys(values) {
+		for _, value := range values[name] {
+			if err := writer.WriteField(name, value); err != nil {
+				return browserNavigation{}, err
+			}
+		}
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		path := strings.TrimSpace(files[name])
+		if path == "" {
+			continue
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return browserNavigation{}, fmt.Errorf("open %s: %w", filepath.Base(path), err)
+		}
+		info, err := f.Stat()
+		if err != nil || info.IsDir() || info.Size() > browserUploadMax {
+			_ = f.Close()
+			if err == nil {
+				err = fmt.Errorf("not a file of at most %d MB", browserUploadMax>>20)
+			}
+			return browserNavigation{}, fmt.Errorf("%s: %w", filepath.Base(path), err)
+		}
+		part, err := writer.CreateFormFile(name, filepath.Base(path))
+		if err == nil {
+			_, err = io.Copy(part, io.LimitReader(f, browserUploadMax+1))
+		}
+		_ = f.Close()
+		if err != nil {
+			return browserNavigation{}, err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return browserNavigation{}, err
+	}
+	nav.Body = body.Bytes()
+	nav.ContentType = writer.FormDataContentType()
+	return nav, nil
+}
+
+// sortedKeys is the sorted key list a multipart body writes its fields in.
+func sortedKeys(values url.Values) []string {
+	keys := make([]string, 0, len(values))
+	for name := range values {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // browserFormNavigation builds the request from a form's declared action,

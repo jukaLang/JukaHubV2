@@ -72,6 +72,10 @@ type musicNowState struct {
 	live        bool
 	playing     bool
 	paused      bool
+	// buffering is a live station whose decoder has not queued a sample yet;
+	// stationTitle is the ICY title the station is playing now.
+	buffering    bool
+	stationTitle string
 }
 
 // musicNow is the loaded track's state; ok is false with nothing loaded.
@@ -82,7 +86,11 @@ func musicNow() (musicNowState, bool) {
 		return musicNowState{}, false
 	}
 	t := music.tracks[music.current]
-	return musicNowState{title: t.Name, path: t.Path, live: musicLiveLocked(), playing: music.playing, paused: music.paused}, true
+	return musicNowState{
+		title: t.Name, path: t.Path, live: musicLiveLocked(), playing: music.playing, paused: music.paused,
+		buffering:    music.playing && !music.paused && musicLiveLocked() && music.pcmBytes == 0,
+		stationTitle: radioICYTitleFor(t.Path),
+	}, true
 }
 
 // shown reports whether the radio screens offer the track on a Now playing
@@ -102,11 +110,14 @@ func (s musicNowState) action() string {
 	return "Play"
 }
 
-// state is where the track is: "Playing", "Paused" or "Stopped".
+// state is where the track is: "Playing", "Paused", "Buffering" or
+// "Stopped". A live station buffers until its decoder queues its first sample.
 func (s musicNowState) state() string {
 	switch {
 	case !s.playing:
 		return "Stopped"
+	case s.buffering:
+		return "Buffering"
 	case s.paused:
 		return "Paused"
 	}

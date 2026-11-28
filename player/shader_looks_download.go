@@ -108,6 +108,13 @@ var looksOverlayZips = []string{
 	"https://codeload.github.com/SkyWalker541/TrimUI-Brick-Overlays/zip/refs/heads/master",
 }
 
+// looksOverlayFallbackZips is libretro's own pack, tried when SkyWalker541's
+// repository cannot be read. It is the buildbot pack the Overlay row offers
+// when a RetroArch's overlay folders hold nothing.
+var looksOverlayFallbackZips = []string{
+	"https://buildbot.libretro.com/assets/frontend/overlays.zip",
+}
+
 var looksOverlayExts = map[string]bool{".cfg": true, ".png": true, ".txt": true, ".md": true}
 
 // looksDL is the download in progress, for the row. Any goroutine.
@@ -116,6 +123,7 @@ var looksDL struct {
 	running bool
 	stage   string
 	percent int // -1 when the size is not known
+	cancel  context.CancelFunc
 }
 
 func looksSetStage(stage string, percent int) {
@@ -163,13 +171,19 @@ func looksDownloadStart(c *Config) {
 	looksDL.Lock()
 	if looksDL.running {
 		looksDL.Unlock()
-		setToast("Already downloading looks")
+		if looksDownloadCancel() {
+			setToast("Cancelling Download looks…")
+		} else {
+			setToast("Already downloading looks")
+		}
 		return
 	}
-	looksDL.running, looksDL.stage, looksDL.percent = true, "Starting…", -1
+	ctx, cancel := context.WithTimeout(context.Background(), looksTimeout)
+	looksDL.running, looksDL.stage, looksDL.percent, looksDL.cancel = true, "Starting…", -1, cancel
 	looksDL.Unlock()
 	showToastPrimitive("Downloading looks…", ToastKindInfo)
 	go func() {
+		defer cancel()
 		var res looksResult
 		func() {
 			defer func() {
@@ -177,10 +191,10 @@ func looksDownloadStart(c *Config) {
 					res.Err = fmt.Errorf("stopped: %v", r)
 				}
 			}()
-			res = looksDownload()
+			res = looksDownload(ctx)
 		}()
 		looksDL.Lock()
-		looksDL.running, looksDL.stage = false, ""
+		looksDL.running, looksDL.stage, looksDL.cancel = false, "", nil
 		looksDL.Unlock()
 		videoFilterProbesForget()
 		raTuneOverlaysForget()
@@ -196,16 +210,33 @@ func looksDownloadStart(c *Config) {
 	}()
 }
 
+// looksDownloadCancel stops the running download. It reports whether one was
+// running; the goroutine clears running when it returns.
+func looksDownloadCancel() bool {
+	looksDL.Lock()
+	cancel := looksDL.cancel
+	if !looksDL.running || cancel == nil {
+		looksDL.Unlock()
+		return false
+	}
+	looksDL.cancel = nil
+	looksDL.stage = "Cancelling…"
+	looksDL.Unlock()
+	cancel()
+	return true
+}
+
 // looksResult is what one download did.
 type looksResult struct {
-	Err      error    // nothing could start (no RetroArch)
-	Ready    []string // looks whose files are on the card now
-	Failed   []string
-	ShadeErr error  // the first reason a look failed
-	Slang    string // the driver, when shaders were skipped for it
-	Overlays int    // overlay files written or already current
-	OverErr  error
-	Kept     int // files the user changed, left alone
+	Err       error    // nothing could start (no RetroArch)
+	Ready     []string // looks whose files are on the card now
+	Failed    []string
+	ShadeErr  error  // the first reason a look failed
+	Slang     string // the driver, when shaders were skipped for it
+	Overlays  int    // overlay files written or already current
+	OverErr   error
+	Kept      int  // files the user changed, left alone
+	Cancelled bool // the user pressed Download looks again
 }
 
 // looksProblem words an error for a toast.
@@ -216,6 +247,9 @@ func looksOffline(err error) bool {
 }
 
 func (r looksResult) message() (string, ToastKind) {
+	if r.Cancelled {
+		return "Download cancelled", ToastKindInfo
+	}
 	if r.Err != nil {
 		return "Could not download looks: " + looksProblem(r.Err), ToastKindWarning
 	}
@@ -255,7 +289,7 @@ func (r looksResult) message() (string, ToastKind) {
 }
 
 // looksDownload does the whole download. Its own goroutine.
-func looksDownload() looksResult {
+func looksDownload(ctx context.Context) looksResult {
 	var res looksResult
 	targets := raScopeTargets(raTuneCandidates())
 	if len(targets) == 0 {
@@ -265,8 +299,6 @@ func looksDownload() looksResult {
 	cfgPath := targets[0]
 	raw, _ := os.ReadFile(cfgPath)
 	cfg := string(raw)
-	ctx, cancel := context.WithTimeout(context.Background(), looksTimeout)
-	defer cancel()
 	client := looksHTTPClient()
 	man := looksManifestLoad()
 	defer looksManifestSave(man)
@@ -276,10 +308,17 @@ func looksDownload() looksResult {
 	} else {
 		looksFetchShaders(ctx, client, man, looksShaderDir(cfg, cfgPath), &res)
 	}
+	if ctx.Err() != nil {
+		res.Cancelled = true
+		return res
+	}
 	n, kept, err := looksFetchOverlays(ctx, client, man, filepath.Join(looksOverlayRoot(cfg, cfgPath), looksOverlayDir))
 	res.Overlays, res.Kept, res.OverErr = n, res.Kept+kept, err
 	if err != nil {
-		logWarn("video", "SkyWalker541's overlays: %v", err)
+		logWarn("video", "overlay pack: %v", err)
+	}
+	if ctx.Err() != nil {
+		res.Cancelled = true
 	}
 	return res
 }
@@ -600,7 +639,8 @@ func looksFetchOverlays(ctx context.Context, client *http.Client, man *looksMani
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return 0, 0, err
 	}
-	tmp, err := looksDownloadTemp(ctx, client, looksOverlayZips, filepath.Dir(dest), ".jukahub-overlays-*.zip", looksOverlayZipMax, "Downloading SkyWalker541's overlays")
+	urls := append(append([]string{}, looksOverlayZips...), looksOverlayFallbackZips...)
+	tmp, err := looksDownloadTemp(ctx, client, urls, filepath.Dir(dest), ".jukahub-overlays-*.zip", looksOverlayZipMax, "Downloading overlays")
 	if err != nil {
 		return 0, 0, err
 	}
@@ -610,7 +650,14 @@ func looksFetchOverlays(ctx context.Context, client *http.Client, man *looksMani
 		return 0, 0, fmt.Errorf("the overlay pack is not a zip: %w", err)
 	}
 	defer zr.Close()
-	looksSetStage("Unpacking SkyWalker541's overlays…", -1)
+	looksSetStage("Unpacking the overlays…", -1)
+	root := looksZipRoot(zr.File)
+	packRel := func(name string) string {
+		if root == "" {
+			return name
+		}
+		return strings.TrimPrefix(name, root+"/")
+	}
 	var total uint64
 	count, written, kept, failed := 0, 0, 0, 0
 	var cfgs []string
@@ -623,11 +670,7 @@ func looksFetchOverlays(ctx context.Context, client *http.Client, man *looksMani
 			continue
 		}
 		name := strings.ReplaceAll(f.Name, `\`, "/")
-		i := strings.IndexByte(name, '/')
-		if i < 0 {
-			continue // the zip's files all sit in its top folder
-		}
-		rel := name[i+1:]
+		rel := packRel(name)
 		ext := strings.ToLower(path.Ext(rel))
 		if rel == "" || unsafeArchiveName(rel) || looksHiddenPath(rel) || !looksOverlayExts[ext] {
 			continue
@@ -677,8 +720,8 @@ func looksFetchOverlays(ctx context.Context, client *http.Client, man *looksMani
 	// A picture the user kept is still the pack's name for it.
 	for _, f := range zr.File {
 		name := strings.ReplaceAll(f.Name, `\`, "/")
-		if i := strings.IndexByte(name, '/'); i >= 0 && strings.EqualFold(path.Ext(name), ".png") {
-			rel := name[i+1:]
+		if strings.EqualFold(path.Ext(name), ".png") {
+			rel := packRel(name)
 			key := strings.ToLower(path.Base(rel))
 			known := false
 			for _, r := range pngs[key] {
@@ -696,6 +739,29 @@ func looksFetchOverlays(ctx context.Context, client *http.Client, man *looksMani
 		return 0, 0, errors.New("the pack had no overlays")
 	}
 	return written, kept, nil
+}
+
+// looksZipRoot is a pack's single top folder, or "" when its files sit at the
+// root or in several top folders. SkyWalker541's repository zip has one;
+// libretro's buildbot overlays.zip starts at borders/, flat/, and so on.
+func looksZipRoot(files []*zip.File) string {
+	root := ""
+	for _, f := range files {
+		if f.FileInfo().IsDir() || f.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		name := strings.TrimPrefix(strings.ReplaceAll(f.Name, `\`, "/"), "./")
+		i := strings.IndexByte(name, '/')
+		if i <= 0 || i == len(name)-1 {
+			return "" // a file at the archive's root: no single top folder
+		}
+		if root == "" {
+			root = name[:i]
+		} else if name[:i] != root {
+			return ""
+		}
+	}
+	return root
 }
 
 // looksOverlayResolves reports whether a picture path in a .cfg (relative to

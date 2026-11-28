@@ -139,7 +139,8 @@ const (
 	raTuneLow      = "low"
 	raTuneLowest   = "lowest"
 
-	raTuneOverlayNone = "none"
+	raTuneOverlayNone     = "none"
+	raTuneOverlayDownload = "__download__"
 
 	raTuneUpright = "upright"
 	raTuneTate    = "tate"

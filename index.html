@@ -402,6 +402,7 @@
                 <div id="rightSidebarContent" class="sidebar-content">
                     <div class="properties-tabs" role="tablist" aria-label="Inspector tabs">
                         <button class="properties-tab active" data-tab="element-properties" type="button" role="tab" aria-selected="true" aria-controls="elementPropertiesPanel">Element</button>
+                        <button class="properties-tab" data-tab="focus-properties" type="button" role="tab" aria-selected="false" aria-controls="focusPropertiesPanel">D-pad order</button>
                         <button class="properties-tab" data-tab="app-properties" type="button" role="tab" aria-selected="false" aria-controls="appInfoPanel">App Info</button>
                     </div>
 
@@ -601,6 +602,15 @@
                             </div>
 
                         </div>
+                    </div>
+
+                    <!-- D-pad order -->
+                    <div id="focusPropertiesPanel" class="properties-panel" role="tabpanel" aria-label="D-pad order">
+                        <section class="inspector-section" aria-labelledby="focusOrderTitle">
+                            <h3 class="inspector-section-title" id="focusOrderTitle">D-pad order</h3>
+                            <p>The order the player visits this scene's buttons in. Use Up and Down to move an element.</p>
+                            <ol id="focusOrderList" class="focus-order-list"></ol>
+                        </section>
                     </div>
 
                     <!-- App Properties -->

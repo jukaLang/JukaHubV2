@@ -68,6 +68,11 @@ type androidPakLibs struct {
 	Chosen  string          // the ABI the game will actually run (arm64 preferred)
 	MainLib string          // "lib/<abi>/<name>.so" — the native entry
 	Title   androidPakTitle // a title AndroidRT knows by name (androidpak_titles.go)
+	// Splits are the split_config APKs beside a base APK whose manifest names
+	// the same package and version (an App Bundle install). Their native
+	// libraries are staged with the base's; the base keeps the manifest and
+	// assets.
+	Splits []string
 }
 
 // androidPakABIOrder matches the A133P: aarch64 first, then 32-bit ARM. x86
@@ -158,18 +163,29 @@ const (
 // res when they are small enough to stage), without touching the disk.
 // Rejected ABIs and DEX are skipped, matching the real staging work.
 func androidPakStageFootprint(apk string, libs androidPakLibs) (int64, error) {
-	zr, err := zip.OpenReader(apk)
-	if err != nil {
-		return 0, fmt.Errorf("open APK: %w", err)
-	}
-	defer zr.Close()
 	chosenPrefix := filepath.ToSlash(filepath.Join("lib", libs.Chosen)) + "/"
-	assets, _ := androidPakAssetsStaged(zr.File)
+	paths := append([]string{apk}, libs.Splits...)
 	var total int64
-	for _, f := range zr.File {
-		if androidPakStageWanted(filepath.ToSlash(f.Name), chosenPrefix, assets) {
-			total = satAddBytes(total, declaredEntryBytes(f.UncompressedSize64))
+	for i, p := range paths {
+		zr, err := zip.OpenReader(p)
+		if err != nil {
+			return 0, fmt.Errorf("open APK: %w", err)
 		}
+		if i == 0 {
+			assets, _ := androidPakAssetsStaged(zr.File)
+			for _, f := range zr.File {
+				if androidPakStageWanted(filepath.ToSlash(f.Name), chosenPrefix, assets) {
+					total = satAddBytes(total, declaredEntryBytes(f.UncompressedSize64))
+				}
+			}
+		} else {
+			for _, f := range zr.File {
+				if strings.HasPrefix(filepath.ToSlash(f.Name), chosenPrefix) {
+					total = satAddBytes(total, declaredEntryBytes(f.UncompressedSize64))
+				}
+			}
+		}
+		zr.Close()
 	}
 	return total, nil
 }
@@ -251,23 +267,37 @@ func androidPakPreflight(apk string, libs androidPakLibs) error {
 // inspectAndroidPak triages an APK read-only. If the profile asks for a
 // specific main library (by base name), it must exist inside one of the
 // shipped ABIs; otherwise the largest .so of the preferred ABI is the entry.
-func inspectAndroidPak(apk string, requestedMain string) (androidPakLibs, error) {
-	zr, err := zip.OpenReader(apk)
+// androidPakZipScan is what one APK file says about its native libraries: the
+// manifest marker, the manifest bytes (for matching split pieces), the ABIs it
+// ships and each library's declared size.
+type androidPakZipScan struct {
+	manifest    bool
+	manifestRaw []byte
+	abis        []string
+	sizes       map[string]int64
+	names       []string
+}
+
+// androidPakScanZip reads one APK's zip directory.
+func androidPakScanZip(path string) (androidPakZipScan, error) {
+	zr, err := zip.OpenReader(path)
 	if err != nil {
-		return androidPakLibs{}, fmt.Errorf("open APK: %w", err)
+		return androidPakZipScan{}, err
 	}
 	defer zr.Close()
-
-	var manifest bool
-	abils := []string{}
+	scan := androidPakZipScan{sizes: map[string]int64{}}
 	seen := map[string]bool{}
-	sizes := map[string]int64{} // "lib/<abi>/<name>.so" → uncompressed size
-	names := make([]string, 0, len(zr.File))
+	scan.names = make([]string, 0, len(zr.File))
 	for _, f := range zr.File {
 		slash := filepath.ToSlash(f.Name)
-		names = append(names, slash)
+		scan.names = append(scan.names, slash)
 		if slash == "AndroidManifest.xml" || slash == "resources.arsc" {
-			manifest = true
+			scan.manifest = true
+		}
+		if slash == "AndroidManifest.xml" && scan.manifestRaw == nil {
+			if raw, err := apkxReadEntry(f, apkxMaxManifestBytes); err == nil {
+				scan.manifestRaw = raw
+			}
 		}
 		if rest, ok := strings.CutPrefix(slash, "lib/"); ok {
 			parts := strings.SplitN(rest, "/", 2)
@@ -275,14 +305,91 @@ func inspectAndroidPak(apk string, requestedMain string) (androidPakLibs, error)
 				abi := parts[0]
 				if !seen[abi] {
 					seen[abi] = true
-					abils = append(abils, abi)
+					scan.abis = append(scan.abis, abi)
 				}
-				sizes[slash] = declaredEntryBytes(f.UncompressedSize64)
+				scan.sizes[slash] = declaredEntryBytes(f.UncompressedSize64)
 			}
 		}
 	}
-	if !manifest {
+	return scan, nil
+}
+
+// androidPakSplitPeers returns the split APKs beside apk whose manifest names
+// the same package and version: the pieces of one app, however the extractor
+// that saved them named the folder. They contribute native libraries only; the
+// base keeps the manifest, resource table and assets.
+func androidPakSplitPeers(apk string, baseRaw []byte) []string {
+	base, err := parseApkManifest(baseRaw)
+	if err != nil || strings.TrimSpace(base.Package) == "" || base.Split != "" {
+		return nil
+	}
+	dir := filepath.Dir(apk)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for i, e := range entries {
+		if i >= 512 || len(out) >= 32 {
+			break
+		}
+		name := strings.ToLower(e.Name())
+		if !strings.HasPrefix(name, "split_") || !strings.HasSuffix(name, ".apk") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if filepath.Clean(p) == filepath.Clean(apk) {
+			continue
+		}
+		scan, err := androidPakScanZip(p)
+		if err != nil || scan.manifestRaw == nil {
+			continue
+		}
+		m, err := parseApkManifest(scan.manifestRaw)
+		if err != nil || m.Package != base.Package || m.VersionCode != base.VersionCode {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func inspectAndroidPak(apk string, requestedMain string) (androidPakLibs, error) {
+	scan, err := androidPakScanZip(apk)
+	if err != nil {
+		return androidPakLibs{}, fmt.Errorf("open APK: %w", err)
+	}
+	if !scan.manifest {
 		return androidPakLibs{}, errors.New("not an APK (no AndroidManifest.xml)")
+	}
+	// A base piece and its split_config APKs are one app: the libraries can
+	// live in the pieces while the manifest and assets stay in the base.
+	splits := androidPakSplitPeers(apk, scan.manifestRaw)
+	abils := append([]string(nil), scan.abis...)
+	seen := map[string]bool{}
+	for _, abi := range abils {
+		seen[abi] = true
+	}
+	sizes := scan.sizes // "lib/<abi>/<name>.so" → uncompressed size
+	names := scan.names
+	for _, splitPath := range splits {
+		ss, err := androidPakScanZip(splitPath)
+		if err != nil || !ss.manifest {
+			continue
+		}
+		names = append(names, ss.names...)
+		for _, abi := range ss.abis {
+			if !seen[abi] {
+				seen[abi] = true
+				abils = append(abils, abi)
+			}
+		}
+		for name, size := range ss.sizes {
+			if _, ok := sizes[name]; !ok {
+				sizes[name] = size
+			}
+		}
 	}
 	if len(sizes) == 0 {
 		return androidPakLibs{}, errors.New("no native libraries — this is a Java/Dalvik app, not a Tier-1 NDK game")
@@ -322,7 +429,7 @@ func inspectAndroidPak(apk string, requestedMain string) (androidPakLibs, error)
 	if err != nil {
 		return androidPakLibs{}, err
 	}
-	return androidPakLibs{Abis: abils, Chosen: chosen, MainLib: mainLib, Title: title}, nil
+	return androidPakLibs{Abis: abils, Chosen: chosen, MainLib: mainLib, Title: title, Splits: splits}, nil
 }
 
 // ── Where AndroidRT is ────────────────────────────────────────────────────
@@ -604,69 +711,88 @@ func stageAndroidPakInto(stageDir, apk string, libs androidPakLibs) (libDir stri
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
 		return "", err
 	}
-	zr, err := zip.OpenReader(apk)
-	if err != nil {
-		return "", fmt.Errorf("open APK: %w", err)
+	paths := append([]string{apk}, libs.Splits...)
+	readers := make([]*zip.ReadCloser, 0, len(paths))
+	defer func() {
+		for _, zr := range readers {
+			zr.Close()
+		}
+	}()
+	entries := 0
+	for _, p := range paths {
+		zr, err := zip.OpenReader(p)
+		if err != nil {
+			return "", fmt.Errorf("open APK: %w", err)
+		}
+		readers = append(readers, zr)
+		entries += len(zr.File)
 	}
-	defer zr.Close()
-	if len(zr.File) > androidPakStageMaxEntries {
-		return "", fmt.Errorf("APK has %d entries (limit %d)", len(zr.File), androidPakStageMaxEntries)
+	if entries > androidPakStageMaxEntries {
+		return "", fmt.Errorf("APKs have %d entries (limit %d)", entries, androidPakStageMaxEntries)
 	}
 	chosenPrefix := filepath.ToSlash(filepath.Join("lib", libs.Chosen)) + "/"
-	assets, assetBytes := androidPakAssetsStaged(zr.File)
+	assets, assetBytes := androidPakAssetsStaged(readers[0].File)
 	if !assets {
 		logInfo("androidpak", "%s: %d MiB of assets stay in the APK on the card (staging only the native libraries)",
 			filepath.Base(apk), assetBytes>>20)
 	}
 	var total int64
-	for _, f := range zr.File {
-		slash := filepath.ToSlash(f.Name)
-		// Only the chosen ABI's libraries go to RAM (other ABIs stay in the
-		// APK on the card), and a big game's assets stay there too.
-		if !androidPakStageWanted(slash, chosenPrefix, assets) {
-			continue
-		}
-		if err := sanitizeArchiveEntry(slash, f.Mode(), f.FileInfo().IsDir()); err != nil {
-			return "", fmt.Errorf("APK entry: %w", err)
-		}
-		target := filepath.Join(stageDir, filepath.FromSlash(slash))
-		if !strings.HasPrefix(target, filepath.Clean(stageDir)+string(filepath.Separator)) {
-			return "", fmt.Errorf("entry escapes staging dir: %q", slash)
-		}
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+	for ri, zr := range readers {
+		for _, f := range zr.File {
+			slash := filepath.ToSlash(f.Name)
+			// Only the chosen ABI's libraries go to RAM (other ABIs stay in
+			// the APK on the card), and a big game's assets stay there too.
+			// A split piece adds its libraries; the base keeps the manifest,
+			// resource table and assets.
+			if ri == 0 {
+				if !androidPakStageWanted(slash, chosenPrefix, assets) {
+					continue
+				}
+			} else if !strings.HasPrefix(slash, chosenPrefix) {
+				continue
+			}
+			if err := sanitizeArchiveEntry(slash, f.Mode(), f.FileInfo().IsDir()); err != nil {
+				return "", fmt.Errorf("APK entry: %w", err)
+			}
+			target := filepath.Join(stageDir, filepath.FromSlash(slash))
+			if !strings.HasPrefix(target, filepath.Clean(stageDir)+string(filepath.Separator)) {
+				return "", fmt.Errorf("entry escapes staging dir: %q", slash)
+			}
+			if f.FileInfo().IsDir() {
+				if err := os.MkdirAll(target, 0o755); err != nil {
+					return "", err
+				}
+				continue
+			}
+			// The declared size is what the stage budget is summed from, and it is
+			// a uint64 from the archive: converting it blindly let a header that
+			// claims more than int64 holds wrap negative and pass the cap below.
+			sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), androidPakStageMaxBytes)
+			if !ok {
+				return "", fmt.Errorf("staged files exceed %d bytes — APK too large for RAM staging", androidPakStageMaxBytes)
+			}
+			total = sum
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return "", err
 			}
-			continue
-		}
-		// The declared size is what the stage budget is summed from, and it is
-		// a uint64 from the archive: converting it blindly let a header that
-		// claims more than int64 holds wrap negative and pass the cap below.
-		sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), androidPakStageMaxBytes)
-		if !ok {
-			return "", fmt.Errorf("staged files exceed %d bytes — APK too large for RAM staging", androidPakStageMaxBytes)
-		}
-		total = sum
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return "", err
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return "", fmt.Errorf("open %q: %w", slash, err)
-		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-		if err != nil {
+			rc, err := f.Open()
+			if err != nil {
+				return "", fmt.Errorf("open %q: %w", slash, err)
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+			if err != nil {
+				rc.Close()
+				return "", androidPakStageWriteErr("create", slash, err)
+			}
+			_, copyErr := io.Copy(out, io.LimitReader(rc, androidPakStageMaxBytes+1))
 			rc.Close()
-			return "", androidPakStageWriteErr("create", slash, err)
-		}
-		_, copyErr := io.Copy(out, io.LimitReader(rc, androidPakStageMaxBytes+1))
-		rc.Close()
-		closeErr := out.Close()
-		if copyErr != nil {
-			return "", androidPakStageWriteErr("extract", slash, copyErr)
-		}
-		if closeErr != nil {
-			return "", androidPakStageWriteErr("extract", slash, closeErr)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return "", androidPakStageWriteErr("extract", slash, copyErr)
+			}
+			if closeErr != nil {
+				return "", androidPakStageWriteErr("extract", slash, closeErr)
+			}
 		}
 	}
 	return libDir, nil

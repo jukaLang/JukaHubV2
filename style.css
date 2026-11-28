@@ -1526,6 +1526,33 @@ body.preview-mode .element:hover {
   display: block;
 }
 
+.focus-order-list {
+  list-style: none;
+  margin: var(--space-md) 0 0;
+  padding: 0;
+}
+
+.focus-order-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--border-subtle, #444);
+  border-radius: var(--radius-sm, 6px);
+  margin-bottom: var(--space-xs);
+}
+
+.focus-order-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-order-item button {
+  min-width: 2.5rem;
+}
+
 .element-properties {
   padding-bottom: var(--space-xl);
 }

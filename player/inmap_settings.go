@@ -28,6 +28,19 @@ func inmapSettingsRows() []setRow {
 				setToast("Button hints: " + hintModeOptions(c)[hintModeCurrent(c)].Label)
 			},
 		},
+		{
+			// Which family's printed names the pad badges use: the controller
+			// in hand in Auto, or one of the three families on request
+			// (inputhints.go, INP-3).
+			ID: "padStyle", Label: "Pad style", Kind: setKindChoice,
+			Detail:  hintPadStyleDetail,
+			Options: hintPadStyleOptions,
+			Current: hintPadStyleCurrent,
+			Choose: func(c *Config, value string) {
+				hintSetPadStyle(c, value)
+				setToast("Pad style: " + hintPadStyleOptions(c)[hintPadStyleCurrent(c)].Label)
+			},
+		},
 		trimuiStickCalSettingsRow(),
 		stickCalSettingsRow(),
 		{
