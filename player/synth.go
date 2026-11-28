@@ -891,7 +891,7 @@ func synthMixRows() []synthRow {
 		}),
 		synthAction("Clear pattern", func() {
 			cur := synthSnapshot().Current
-			if !synthArm("clear", "Press A again to clear pattern "+strconv.Itoa(cur+1)) {
+			if !synthArm("clear", hintSentence("Press %s again to clear pattern ", "A", "Clear")+strconv.Itoa(cur+1)) {
 				return
 			}
 			synthEdit(func(p *synthProject, e *synthEngine) { p.Patterns[p.Current] = synthPattern{} })
@@ -900,7 +900,7 @@ func synthMixRows() []synthRow {
 			synthEdit(func(p *synthProject, e *synthEngine) { synthRandomBeat(p) })
 		}),
 		synthAction("Load the demo", func() {
-			if !synthArm("demo", "Press A again to replace this project with the demo") {
+			if !synthArm("demo", hintSentence("Press %s again to replace this project with the demo", "A", "Replace")) {
 				return
 			}
 			synthEdit(func(p *synthProject, e *synthEngine) {

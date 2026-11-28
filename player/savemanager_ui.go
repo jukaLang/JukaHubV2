@@ -204,7 +204,7 @@ func saveManagerRows() []saveManagerRow {
 		if len(savePanel.snapshots) == 0 {
 			return []saveManagerRow{{
 				label:   "No snapshots yet",
-				detail:  "Press B and choose Snapshot now to create the first one.",
+				detail:  hintSentence("Press %s and choose Snapshot now to create the first one.", "B", "Back"),
 				enabled: false,
 			}}
 		}
@@ -245,7 +245,7 @@ func saveManagerRows() []saveManagerRow {
 		{
 			label:   "Restore latest",
 			value:   latest,
-			detail:  "Takes a safety snapshot first. Press A twice to confirm.",
+			detail:  hintSentence("Takes a safety snapshot first. Press %s twice to confirm.", "A", "Confirm"),
 			hint:    hintLine(FooterHint{"A", "Restore"}),
 			action:  saveActionRestoreLatest,
 			enabled: len(savePanel.snapshots) > 0,
@@ -345,7 +345,7 @@ func saveManagerActivate() {
 		snap := savePanel.snapshots[savePanel.cursor]
 		if savePanel.confirm != snap.Manifest.ID {
 			savePanel.confirm = snap.Manifest.ID
-			ShowToast("Press A again to restore "+saveSnapshotTime(snap), ToastKindInfo)
+			ShowToast(hintSentence("Press %s again to restore ", "A", "Restore")+saveSnapshotTime(snap), ToastKindInfo)
 			return
 		}
 		restoreSaveManagerSnapshot(snap)
@@ -379,7 +379,7 @@ func saveManagerActivate() {
 		}
 		if savePanel.confirm != snap.Manifest.ID {
 			savePanel.confirm = snap.Manifest.ID
-			ShowToast("Press A again to restore "+saveSnapshotTime(snap), ToastKindWarning)
+			ShowToast(hintSentence("Press %s again to restore ", "A", "Restore")+saveSnapshotTime(snap), ToastKindWarning)
 			return
 		}
 		restoreSaveManagerSnapshot(snap)

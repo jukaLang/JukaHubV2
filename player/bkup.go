@@ -1253,11 +1253,36 @@ func bkupRestoreFiles(ctx context.Context, plan bkupRestorePlan, cats map[string
 			res.UserData, res.HasUser = data, true
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(rf.Dest), 0o755); err != nil {
+		// Restore writes through the destination's os.Root: a symlink already
+		// inside a writable folder must not redirect a verified backup file.
+		destDir := filepath.Dir(rf.Dest)
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
 			res.Skipped = append(res.Skipped, rf.File.Target+": "+err.Error())
 			continue
 		}
-		if err := AtomicWrite(rf.Dest, data, 0o644); err != nil {
+		root, err := os.OpenRoot(destDir)
+		if err != nil {
+			res.Skipped = append(res.Skipped, rf.File.Target+": "+err.Error())
+			continue
+		}
+		name := filepath.Base(rf.Dest)
+		hidden := "." + name + ".jukabak.tmp"
+		out, err := root.OpenFile(hidden, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		if err == nil {
+			_, err = out.Write(data)
+			if syncErr := out.Sync(); err == nil {
+				err = syncErr
+			}
+			if closeErr := out.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		if err == nil {
+			err = root.Rename(hidden, name)
+		}
+		_ = root.Remove(hidden)
+		root.Close()
+		if err != nil {
 			res.Skipped = append(res.Skipped, rf.File.Target+": "+err.Error())
 			continue
 		}

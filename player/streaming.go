@@ -233,51 +233,55 @@ type streamAttempt struct {
 	args []string
 }
 
-func streamAttempts(maxHeight int) []streamAttempt {
+func streamAttempts(maxHeight int, jsRuntime bool) []streamAttempt {
 	muxed := streamFormatSelector(maxHeight)
 	// 18 is the 360p muxed MP4 the android and embedded clients still serve;
 	// asking for it first is the last chance before the caller downloads the
 	// whole file.
 	anyMuxed := "18/" + muxed
-	return []streamAttempt{
-		{
-			// android alone. It used to share this call with android_vr, but
-			// since 2026-08-17 the CDN refuses every android_vr format (yt-dlp
-			// issue 17456) while its player call still answers, so yt-dlp could
-			// hand back an android_vr URL that ffmpeg was then refused.
-			name: "android client",
-			args: []string{
-				"--extractor-args", "youtube:player_client=android",
-				"-f", muxed,
-			},
-		},
-		{
-			// yt-dlp's own default clients — maintained upstream and refreshed
-			// by every update (ytdlp_update.go) — plus web_embedded, the client
-			// yt-dlp itself falls back to for format 18. Both need the
-			// JavaScript runtime yt-dlp looks for on PATH (helperToolEnv puts
-			// the tools folder there, so a runtime dropped next to the helper
-			// is found).
-			name: "default clients",
-			args: []string{
-				"--extractor-args", "youtube:player_client=default,web_embedded",
-				"-f", anyMuxed,
-			},
-		},
-		{
-			// The clients that used to work, in one call: ios and tv, for
-			// helpers old enough to still prefer them. android_vr is not asked
-			// any more: yt-dlp prints its format 18 without fetching it, so the
-			// attempt "succeeded" with a URL the CDN refuses (403 since
-			// 2026-08-17), failed the probe, and the refusal that explained the
-			// failure never reached the message.
-			name: "legacy clients",
-			args: []string{
-				"--extractor-args", "youtube:player_client=ios,tv",
-				"-f", anyMuxed,
-			},
+	// android alone. It used to share this call with android_vr, but since
+	// 2026-08-17 the CDN refuses every android_vr format (yt-dlp issue 17456)
+	// while its player call still answers, so yt-dlp could hand back an
+	// android_vr URL that ffmpeg was then refused.
+	android := streamAttempt{
+		name: "android client",
+		args: []string{
+			"--extractor-args", "youtube:player_client=android",
+			"-f", muxed,
 		},
 	}
+	// yt-dlp's own default clients — maintained upstream and refreshed by
+	// every update (ytdlp_update.go) — plus web_embedded, the client yt-dlp
+	// itself falls back to for format 18. Both need the JavaScript runtime
+	// yt-dlp looks for on PATH (helperToolEnv puts the tools folder there, so
+	// a runtime next to the helper is found).
+	defaults := streamAttempt{
+		name: "default clients",
+		args: []string{
+			"--extractor-args", "youtube:player_client=default,web_embedded",
+			"-f", anyMuxed,
+		},
+	}
+	// The clients that used to work, in one call: ios and tv, for helpers old
+	// enough to still prefer them. android_vr is not asked any more: yt-dlp
+	// prints its format 18 without fetching it, so the attempt "succeeded"
+	// with a URL the CDN refuses (403 since 2026-08-17), failed the probe, and
+	// the refusal that explained the failure never reached the message.
+	legacy := streamAttempt{
+		name: "legacy clients",
+		args: []string{
+			"--extractor-args", "youtube:player_client=ios,tv",
+			"-f", anyMuxed,
+		},
+	}
+	// With a QuickJS runtime beside the helper the default clients work and
+	// serve the best formats, so they lead; without one android is the only
+	// client that still hands back a muxed file. The legacy pair stays last
+	// either way.
+	if jsRuntime {
+		return []streamAttempt{defaults, android, legacy}
+	}
+	return []streamAttempt{android, defaults, legacy}
 }
 
 // siteStreamFormatSelector is the yt-dlp selector for a typed site. It ranks
@@ -563,7 +567,7 @@ func resolveDirectStream(ctx context.Context, config *Config, ytDlpPath, source 
 	// A QuickJS runtime next to the helper is named first (ytdownload.go);
 	// the user's own arguments still come last and win.
 	extra := append(ytDlpJSRuntimeArgs(ytDlpPath), ytDlpExtraArgsSlice(config)...)
-	direct, err := resolveWithRunner(ctx, source, maxHeight, extra,
+	direct, err := resolveWithRunner(ctx, source, maxHeight, extra, ytDlpJSRuntimePath(ytDlpPath) != "",
 		func(ctx context.Context, args []string) (string, error) {
 			return ytDlpGetURL(ctx, ytDlpPath, args)
 		})
@@ -579,7 +583,7 @@ func resolveDirectStream(ctx context.Context, config *Config, ytDlpPath, source 
 
 // resolveWithRunner tries each strategy in turn. It stops early when YouTube
 // says the video is unplayable, or when the caller's context expires.
-func resolveWithRunner(ctx context.Context, source string, maxHeight int, extraArgs []string, run ytDlpURLRunner) (string, error) {
+func resolveWithRunner(ctx context.Context, source string, maxHeight int, extraArgs []string, jsRuntime bool, run ytDlpURLRunner) (string, error) {
 	base := []string{
 		"-g",
 		"--no-warnings",
@@ -588,7 +592,7 @@ func resolveWithRunner(ctx context.Context, source string, maxHeight int, extraA
 		"--geo-bypass",
 		"--user-agent", streamUserAgent,
 	}
-	attempts := streamAttempts(maxHeight)
+	attempts := streamAttempts(maxHeight, jsRuntime)
 	if !sourceIsYouTube(source) {
 		attempts = siteStreamAttempts(maxHeight)
 	}

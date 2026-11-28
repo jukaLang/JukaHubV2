@@ -1317,7 +1317,7 @@ func bootLogoRowOpen(*Config) {
 		if op == bootLogoOpInstall {
 			bootLogoToast(lookpackBootLogoArmText(), ToastKindInfo)
 		} else {
-			bootLogoToast("Press A again to put the previous boot logo back", ToastKindInfo)
+			bootLogoToast(hintSentence("Press %s again to put the previous boot logo back", "A", "Restore"), ToastKindInfo)
 		}
 		return
 	}

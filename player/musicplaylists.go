@@ -286,10 +286,7 @@ func musicPlaySavedPlaylist(config *Config, name string) bool {
 	}
 	tracks := make([]musicTrack, 0, len(pl.Tracks))
 	for _, tr := range pl.Tracks {
-		// Same fields in the same order, so a conversion copies them all (the
-		// JSON tags do not count) and a field added to one type but not the
-		// other stops this compiling instead of being dropped silently.
-		tracks = append(tracks, musicTrack(tr))
+		tracks = append(tracks, musicTrack{Path: tr.Path, Name: tr.Name, Duration: tr.Duration})
 	}
 	if !musicPlayPlaylist(tracks, 0) {
 		return false

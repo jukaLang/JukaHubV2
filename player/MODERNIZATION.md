@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **62**.
+Open tasks: **52**.
 
 Open work an agent can finish and check without a person at the device —
 builds, tests, static checks, scripted probes, screenshots it can read — plus
@@ -69,15 +69,6 @@ renderer.
 
 ## Architecture (ARCH)
 
-### ARCH-1 — Package split, step 1: pure leaves (P1, M) [WIN]
-**Where.** `vecraster.go`, `icondefs.go`, `retry.go`, `browserpsl.go`,
-`ramsearch*.go`, `ppsspp_calibration.go`, `port_compat.go`, `lyrics.go`,
-`textutil.go`, `scenetasks.go` (they reference no other file of the package).
-**Done when.** Each lives in `player/internal/<name>` with exported API; `main`
-keeps thin aliases (`var retryDo = retry.Do`) so call sites stay unchanged;
-`make check` green after each move.
-**Verify.** `go build -x` shows the moved packages cached on an edit to `core.go`.
-
 ### ARCH-3 — Package split, step 3: models and parsers (P2, L) [WIN]
 **Where.** PDF (`pdfreader.go`, `pdfv_doc.go`), EPUB/HTML reader (`reader.go`),
 web page model (`webpage*.go`: split layout from drawing), feeds/podcasts,
@@ -108,14 +99,6 @@ BUILDINFO shows only `ALLOWED_NEEDED` libraries, nothing newer than GLIBC 2.31
 and `box64 --version` 0.4.4; the advisory step prints `wine-10.0` or names the
 next fix; a push with unchanged inputs says "Reused … from run N".
 
-### TEST-1 — A scene-dump tool, not a test (P1, M) [WIN]
-**Where.** New `player/tools/scenedump/` (a `go run` program reusing the player
-package through an exported entry point or a build tag).
-**Done when.** `go run ./tools/scenedump -out tmp/scenes` writes every config
-scene and the main Go pages at 1280×720 and 960×720 (SDL dummy driver, software
-renderer) in under a minute.
-**Verify.** The PNGs exist and look right; `docs/DEVELOPMENT.md` documents it.
-
 ### TEST-16 — A supported OpenSSL in the Remote Play helpers (P2, S) [NET]
 **Where.** `player/native/build-helpers.sh` (native mode), `remote-play-helpers.yml`
 (add `perl` for OpenSSL's configure).
@@ -130,22 +113,11 @@ dependencies; configure runs with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON` and
 BUILDINFO lists nothing fetched by configure; libevent is 2.1.13-stable with its
 tarball's SHA-256 checked against the signed release.
 
-### TEST-18 — A packager's digest for the Box64 source (P3, S) [NET]
-**Where.** `player/native/build-runtimes.sh` (`BOX64_COMMIT`).
-**Done when.** A packager's digest for the v0.4.4 release tarball (AUR, or
-Debian or Alpine once they reach it) is checked once against the tree at the
-pinned commit, and the comment above `BOX64_COMMIT` names that source.
-
 ---
 
 ## UX and design (UX)
 
 The review behind these is [docs/UX_REVIEW.md](../docs/UX_REVIEW.md).
-
-### UX-4 — One icon stroke weight (P2, M)
-**Where.** `icondefs.go`, `icondraw.go`, `iconatlas.go`.
-**Done when.** Every 32 px glyph uses one stroke weight and outline style (the
-Packages glyph is a filled 3D box among outlines); atlas re-baked.
 
 ### UX-8 — Touch targets and safe area everywhere (P2, M)
 **Where.** `touchtarget.go`, scene panels.
@@ -238,24 +210,6 @@ current with a pbuffer stays raw; the context-first smoke case asserts 5
 
 ## Media (MED)
 
-### MED-7 — Crossfade and ReplayGain (P3, S)
-**Where.** `musicplayer.go`, `musicsettings.go`.
-**Done when.** An optional crossfade (0–10 s) overlaps a track's end with the
-next one, and ReplayGain track/album tags (read by ffprobe) set the level when
-switched on; both stay off on the bit-perfect path.
-
-### MED-8 — Podcasts offline (P2, M)
-**Done when.** Episodes download for offline listening (Downloads queue), OPML
-import/export works, chapters are shown, played episodes clean up.
-
-### MED-19 — A JavaScript runtime for yt-dlp on Windows (P1, M) [WIN] [NET]
-**Where.** `ytdlp_update.go`, `ytdownload.go` (`ytDlpJSRuntimeArgs` already
-uses a `qjs` next to yt-dlp), `streaming.go` (`streamAttempts`).
-**Done when.** JukaHub installs a pinned, checksum-verified runtime
-(QuickJS-NG, or Deno ≥ 2.3) next to yt-dlp on Windows; stream attempts prefer
-yt-dlp's default clients while it is there; the Patch screen shows its
-version.
-
 ### MED-24 — A YouTube client table that updates without a release (P2, M) [NET]
 **Where.** `youtubenative.go`, `youtubesearch.go`, the update channel.
 **Done when.** A small JSON (client name, version, user agent, client ID,
@@ -335,13 +289,6 @@ Linux `chip-all-clusters-app` in a container commissions it and toggles OnOff.
 **Done when.** The speaker route uses the same mixer on one stereo device (the
 per-output passthrough is gone), and the LED analyser is fed from the mix.
 
-### SND-11 — The game filter on Windows (P3, S) [WIN]
-**Where.** `player/spatialfx/build.sh` (`TARGET=windows`), the Windows release
-job, `spatial_games.go` (where it looks).
-**Done when.** The Windows archive carries the DLL where `spatial_games.go`
-looks, and a RetroArch game started from the library on Windows plays through
-it.
-
 ## Input and controls (INP)
 
 The hint layer (`inputhints.go`) decides whether hints name the pad's buttons or
@@ -356,13 +303,6 @@ pressable on a keyboard: either the generic twin is true there or the hint is
 written `"<pad> / <key>"`; the table stays in step.
 **Verify.** INP-12's checker reports zero mismatches.
 
-### INP-2 — Sentences that name buttons (P1, M)
-**Where.** The files the grep lists; `hintSentence` in `inputhints.go`.
-**Done when.** Each match goes through `hintSentence` or is rewritten without a
-button, and the grep lists only the deliberate physical exceptions: hakuX's exit
-chord, "Press A on a controller to join" (hotseat), the one-handed help text and
-the `inmap*.go` Select+R1 chord (pad-only: remap, no keyboard words).
-
 ### INP-7 — Mouse and touch parity (P2, M)
 **Done when.** Every footer hint badge is clickable (generalise `emuHintHits`),
 right-click is the screen's secondary action (X), the wheel scrolls every list.
@@ -376,9 +316,10 @@ and battery (Bluetooth from `bt_padinfo.go`, others from
 the pad has one; hotseat uses the same numbering.
 
 ### INP-12 — Hint truth checker (P2, M) [WIN]
-**Where.** A `tools/hintcheck` program (or a scenedump mode, TEST-1) that, for
-each scene and state, renders the footer in both vocabularies and replays each
-hint's key through the scene's key handler with a recording stub.
+**Where.** A `tools/hintcheck` program (or a mode of the app, like the scene
+dump) that, for each scene and state, renders the footer in both vocabularies
+and replays each hint's key through the scene's key handler with a recording
+stub.
 **Done when.** A `make` target runs it and lists mismatches.
 
 ### INP-19 — Offline voice recognition on Windows (P3, M) [WIN]
@@ -437,14 +378,6 @@ candidate strip (`vkeyboard.go` already has a suggestion strip); physical
 keyboards get `SDL_TEXTEDITING` handling.
 
 ## Security and privacy (SEC)
-
-### SEC-1 — Every extraction through `os.Root` (P2, M)
-**Where.** `emu7z.go`, `ports_store_install.go`, `ppsspp_managed.go`,
-`tts_install.go`, `emulatorupdates.go`, `androidpak.go`, `relpack.go`,
-`ssyncbundle.go`, `bkup.go` (restore). `extractZipSafe` and `extractTarGzSafe`
-(`patch_engine.go`, `openExtractRoot`) and `pkgExtractZip` are the pattern.
-**Done when.** Each writes through an `os.Root` opened on its destination;
-traversal tests stay green.
 
 ### SEC-6 — Plugin permissions and signing (P1, L) [OWNER]
 **Done when.** Manifests declare permissions (network, files outside the
@@ -581,8 +514,6 @@ are rough.
 
 - **Theme from an image** (M): median-cut palette into the 16 theme roles, on
   `themeloader.go`.
-- **Seasonal themes by date** (S): the time-of-day hook exists; add a date
-  table.
 - **Toys** (S–M each): time capsule / sealed notes, secret modes, playable
   credits, virtual pet, retro OS skin pack, arcade kiosk.
 - **Save forensics** (M): list + diff two snapshots.
@@ -593,16 +524,13 @@ are rough.
   console (XL). (Paint already draws pixel art.)
 - **Per-game colour filters** (S, muOS has them): a colour matrix per game on
   top of the accessibility palettes.
-- **"Play style" profile** (S): when and what you play, from the playtime
-  session log.
 - **Tabs Home extras** (S each): an unread dot on the tab that holds Chat; a
   per-tab accent tint of the strip's pill; each tab's scroll kept across
   restarts; hold A on the strip to arrange; a crossfade between tabs under
   Reduce motion.
 - **Per-game hakuX settings** (S): once the package's per-title settings layout
   is known, the game options sheet opens it for Xbox games.
-- **Event webhooks** (S): opt-in POSTs for game launched / trophy unlocked /
-  install finished (bounded queue, no secrets in payloads).
+- **More webhook events** (S): a game launch already POSTs to an opt-in HTTPS receiver through the bounded, secret-free queue; trophy unlocks and install completions still need wiring to their callbacks.
 - **Community widgets** (M): a widget for Home's Widgets layout
   (`home_widgetdraw.go`) as a sandboxed JSON descriptor (text or a number from a
   local source, refresh interval) delivered as a package; no code.
@@ -656,10 +584,7 @@ are rough.
   playtime, and muOS collections, offered at the first start.
 - **Discrete 5.1 and 7.1 under spatial audio** (M): each channel from its own
   virtual loudspeaker (`spatial_dsp.go`), with golden vectors.
-- **Add JukaHub to Steam** (S): a non-Steam shortcut with art from `branding/`,
-  and Steam Input's virtual pad as the hint vocabulary.
-- **Open with JukaHub** (S): files and `--scene` on the command line,
-  registered by the installer.
+- **Steam Input as a hint vocabulary** (S): a non-Steam shortcut is already added by `--add-steam-shortcut`; what remains is naming Steam Input's virtual pad in the hints.
 - **Windows toasts** (S): downloads, alarms and updates as Windows
   notifications while minimised (the AUMID comes with the installer).
 - **Keyboard profiles** (M): key-to-action bindings in the control-profile

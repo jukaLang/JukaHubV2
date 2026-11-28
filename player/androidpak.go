@@ -711,6 +711,13 @@ func stageAndroidPakInto(stageDir, apk string, libs androidPakLibs) (libDir stri
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
 		return "", err
 	}
+	// The stage is freshly recreated, but os.Root still closes the gap a
+	// symlink planted in a user-chosen JUKAHUB_ANDROID_STAGE would open.
+	root, err := os.OpenRoot(stageDir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 	paths := append([]string{apk}, libs.Splits...)
 	readers := make([]*zip.ReadCloser, 0, len(paths))
 	defer func() {
@@ -754,12 +761,9 @@ func stageAndroidPakInto(stageDir, apk string, libs androidPakLibs) (libDir stri
 			if err := sanitizeArchiveEntry(slash, f.Mode(), f.FileInfo().IsDir()); err != nil {
 				return "", fmt.Errorf("APK entry: %w", err)
 			}
-			target := filepath.Join(stageDir, filepath.FromSlash(slash))
-			if !strings.HasPrefix(target, filepath.Clean(stageDir)+string(filepath.Separator)) {
-				return "", fmt.Errorf("entry escapes staging dir: %q", slash)
-			}
+			rel := filepath.FromSlash(slash)
 			if f.FileInfo().IsDir() {
-				if err := os.MkdirAll(target, 0o755); err != nil {
+				if err := root.MkdirAll(rel, 0o755); err != nil {
 					return "", err
 				}
 				continue
@@ -772,14 +776,14 @@ func stageAndroidPakInto(stageDir, apk string, libs androidPakLibs) (libDir stri
 				return "", fmt.Errorf("staged files exceed %d bytes — APK too large for RAM staging", androidPakStageMaxBytes)
 			}
 			total = sum
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 				return "", err
 			}
 			rc, err := f.Open()
 			if err != nil {
 				return "", fmt.Errorf("open %q: %w", slash, err)
 			}
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+			out, err := root.OpenFile(rel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 			if err != nil {
 				rc.Close()
 				return "", androidPakStageWriteErr("create", slash, err)

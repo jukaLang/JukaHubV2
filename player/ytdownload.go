@@ -545,8 +545,20 @@ func ytdlArgs(config *Config, ytDlpPath, page, tempPath string, a ytdlAttempt) [
 // --js-runtimes quickjs:PATH). A qjs put into the tools folder is used from
 // then on, by the stream attempts as well (streaming.go).
 func ytDlpJSRuntimeArgs(ytDlpPath string) []string {
-	if ytDlpPath == "" || !filepath.IsAbs(ytDlpPath) {
+	qjs := ytDlpJSRuntimePath(ytDlpPath)
+	if qjs == "" {
 		return nil
+	}
+	return []string{"--js-runtimes", "quickjs:" + qjs}
+}
+
+// ytDlpJSRuntimePath is the QuickJS binary beside the helper, or "" when there
+// is none. QuickJS-NG is the runtime JukaHub pins and installs on Windows
+// (ytdlp_jsruntime.go); a qjs the user dropped beside yt-dlp on the handheld is
+// found here too.
+func ytDlpJSRuntimePath(ytDlpPath string) string {
+	if ytDlpPath == "" || !filepath.IsAbs(ytDlpPath) {
+		return ""
 	}
 	name := "qjs"
 	if runtime.GOOS == "windows" {
@@ -554,9 +566,9 @@ func ytDlpJSRuntimeArgs(ytDlpPath string) []string {
 	}
 	qjs := filepath.Join(filepath.Dir(ytDlpPath), name)
 	if st, err := os.Stat(qjs); err != nil || !st.Mode().IsRegular() {
-		return nil
+		return ""
 	}
-	return []string{"--js-runtimes", "quickjs:" + qjs}
+	return qjs
 }
 
 // ytdlRunAttempt runs one yt-dlp attempt into tempPath. It returns nil when

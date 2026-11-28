@@ -123,8 +123,11 @@ func emu7zFailure(output string) string {
 // emu7zExtract unpacks archive into dest with 7-Zip ("x" keeps the folder
 // structure; -y answers every prompt; -bd drops the progress meter a hidden
 // console cannot show). 7-Zip refuses absolute and parent-relative entry paths
-// on its own. Exit code 1 is 7-Zip's "warning" — the files were written — so
-// it is accepted; the caller still checks the emulator's executable is there.
+// on its own. This is the one extractor SEC-1 cannot put behind os.Root: the
+// writes are made by 7-Zip itself, not by Go, so the external process must be
+// trusted and its output checked. Exit code 1 is 7-Zip's "warning" — the files
+// were written — so it is accepted; the caller still checks the emulator's
+// executable is there.
 func emu7zExtract(ctx context.Context, client *http.Client, archive, dest string) error {
 	tool, err := emu7zTool(ctx, client)
 	if err != nil {

@@ -261,7 +261,7 @@ func bootLockDrawEntry(renderer *sdl.Renderer, f bootLockFontSet, cx, y, h int32
 		return
 	}
 	if bootLock.kind == bootLockKindPassword {
-		label := "Press A to type"
+		label := hintSentence("Press %s to type", "A", "Type")
 		if bootLockWaitLeft() > 0 && (bootLock.mode == bootLockModeLocked || bootLock.step == bootLockStepCurrent) {
 			label = "Wait for the timer"
 		}

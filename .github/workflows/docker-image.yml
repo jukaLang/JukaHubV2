@@ -880,6 +880,15 @@ jobs:
           echo "Build completed in $((SECONDS - start)) s."
           echo "- go build: $((SECONDS - start)) s" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build the game-audio plugin for Windows
+        # SND-11: the spatial DSP RetroArch games load, at lib/ beside the exe
+        # where defaultSpatialPluginLocate (player/spatial_games.go) looks.
+        # build.sh checks the DLL's architecture, imports and exports before
+        # stage-windows.sh copies it into the release folder.
+        run: |
+          CROSS=x86_64-w64-mingw32- sh player/spatialfx/stage-windows.sh JukaHub-Trimui-Windows
+          test -f JukaHub-Trimui-Windows/lib/jukahub-spatial.dll
+
       - name: Package Artifacts
         run: |
           cd player

@@ -708,9 +708,9 @@ func toolUnavailableMessage(tool string, err error) string {
 		return "Offline — connect WiFi to install " + tool
 	}
 	if err != nil {
-		return "Could not install " + tool + " — press A to retry"
+		return "Could not install " + tool + hintSentence(" — press %s to retry", "A", "Retry")
 	}
-	return tool + " is required and could not be installed — press A to retry"
+	return tool + " is required and could not be installed" + hintSentence(" — press %s to retry", "A", "Retry")
 }
 
 // installMissingToolsAfterReconnect clears the one-shot auto-install guard for
@@ -779,7 +779,7 @@ func refreshToolHealth() {
 	case !IsOnline():
 		showToast("Offline — connect WiFi to install "+strings.Join(missing, ", "), ToastWarn())
 	case len(failures) > 0:
-		showToast("Could not install "+strings.Join(missing, ", ")+" — press A to retry", ToastError())
+		showToast("Could not install "+strings.Join(missing, ", ")+hintSentence(" — press %s to retry", "A", "Retry"), ToastError())
 	default:
 		showToast("Missing tools: "+strings.Join(missing, ", ")+" — restart JukaHub to install", ToastWarn())
 	}

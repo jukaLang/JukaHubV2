@@ -806,7 +806,7 @@ func fileEditorRequestClose() {
 	if fileEditorDirty() && !fileEditor.confirm {
 		fileEditor.confirm = true
 		PlayNavSound()
-		showToast("Unsaved changes — press B again to discard", ToastWarn())
+		showToast(hintSentence("Unsaved changes — press %s again to discard", "B", "Discard"), ToastWarn())
 		return
 	}
 	fileEditorForget()

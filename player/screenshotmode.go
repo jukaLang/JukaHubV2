@@ -39,12 +39,20 @@ package main
 // `JukaHub --screenshot-tour <dir>` turns the mode on, opens the screens the
 // README shows one after another, writes home.png, media.png, settings.png and
 // ambient.png into <dir>, and quits.
+//
+// `JukaHub --scene-dump <dir>` is the scene-dump mode: one child per canvas
+// size (1280x720 and 960x720), every configured scene in each, written as
+// <dir>/<size>/<scene>.png. It is for reviewing layouts, not for README
+// pictures, so it switches without the fade and does not wait out loading
+// cards; Exit is skipped because opening it quits.
 
 import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +76,9 @@ type shotOptions struct {
 	on      bool
 	dir     string // where F12 captures go
 	tourDir string // set when --screenshot-tour asked for the walk
+	dumpDir string // set when --scene-dump asked for every scene
+	// canvasW/H override the canvas the app starts on, for a dump child.
+	canvasW, canvasH int32
 }
 
 // shotMode is this run's screenshot mode. init writes it once, before any
@@ -86,6 +97,11 @@ func init() {
 	if opts.tourDir != "" {
 		if abs, err := filepath.Abs(opts.tourDir); err == nil {
 			opts.tourDir = abs
+		}
+	}
+	if opts.dumpDir != "" {
+		if abs, err := filepath.Abs(opts.dumpDir); err == nil {
+			opts.dumpDir = abs
 		}
 	}
 	if opts.dir == "" {
@@ -113,7 +129,7 @@ func shotParseOptions(args []string, getenv func(string) string) shotOptions {
 		switch name {
 		case "screenshot-mode":
 			o.on = !hasValue || shotTruthy(value)
-		case "screenshot-tour", "screenshot-dir":
+		case "screenshot-tour", "screenshot-dir", "scene-dump", "canvas":
 			if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				value = args[i+1]
 				i++
@@ -123,7 +139,20 @@ func shotParseOptions(args []string, getenv func(string) string) shotOptions {
 				o.dir = value
 				continue
 			}
+			if name == "canvas" {
+				if w, h, ok := shotCanvasSize(value); ok {
+					o.canvasW, o.canvasH = w, h
+				}
+				continue
+			}
 			o.on = true
+			if name == "scene-dump" {
+				o.dumpDir = value
+				if o.dumpDir == "" {
+					o.dumpDir = "scenes"
+				}
+				continue
+			}
 			o.tourDir = value
 			if o.tourDir == "" {
 				o.tourDir = "screenshots"
@@ -137,6 +166,22 @@ func shotParseOptions(args []string, getenv func(string) string) shotOptions {
 		o.dir = strings.TrimSpace(getenv("JUKAHUB_SCREENSHOT_DIR"))
 	}
 	return o
+}
+
+// shotCanvasSize reads a WxH canvas override such as 1280x720. A size outside
+// the app's supported window range is refused rather than passing a nonsense
+// canvas to the layout.
+func shotCanvasSize(value string) (int32, int32, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(value)), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	w, errW := strconv.Atoi(strings.TrimSpace(parts[0]))
+	h, errH := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errW != nil || errH != nil || w < 320 || h < 240 || w > 3840 || h > 2160 {
+		return 0, 0, false
+	}
+	return int32(w), int32(h), true
 }
 
 // shotTruthy reads an on/off value the way the other JUKAHUB_* switches do.
@@ -201,19 +246,28 @@ func shotTick(renderer *sdl.Renderer) {
 		shotFitWindow()
 		logInfo("screenshot", "mode on: pad hints, clock 9:41, no weather, LAN %s, Wi-Fi %q; F12 saves PNGs to %s",
 			shotLANAddress, shotSSID, shotMode.dir)
-		if shotMode.tourDir != "" {
-			shotTour.steps = shotTourSteps()
-			shotTour.phase = shotPhaseBoot
-			shotTour.at = now
-			logInfo("screenshot", "tour: %d screens into %s", len(shotTour.steps), shotMode.tourDir)
-		}
 	}
-	if shotMode.tourDir == "" || shotTour.phase == shotPhaseDone {
+	if (shotMode.tourDir == "" && shotMode.dumpDir == "") || shotTour.phase == shotPhaseDone {
 		return
 	}
 	c := appConfig
 	if c == nil {
 		return
+	}
+	if !shotTour.armed {
+		// The scene dump needs the loaded config to know every page, so the
+		// walk is armed here rather than on the first frame.
+		shotTour.armed = true
+		shotTour.phase = shotPhaseBoot
+		shotTour.at = now
+		if shotMode.dumpDir != "" {
+			shotTour.steps = shotDumpSteps(c, screenWidth, screenHeight)
+			logInfo("screenshot", "scene dump: %d scenes at %dx%d into %s",
+				len(shotTour.steps), screenWidth, screenHeight, shotMode.dumpDir)
+		} else {
+			shotTour.steps = shotTourSteps()
+			logInfo("screenshot", "tour: %d screens into %s", len(shotTour.steps), shotMode.tourDir)
+		}
 	}
 	// The dock and the screensaver wait for the user to go idle; a tour that
 	// is still walking is not idle.
@@ -255,8 +309,13 @@ const (
 )
 
 // shotTourBoot is how long the tour lets the first screen load (the pairing
-// QR, the Continue thumbnail, fonts) before it starts.
-const shotTourBoot = 6 * time.Second
+// QR, the Continue thumbnail, fonts) before it starts. A scene dump only needs
+// the window and the layout, so it starts sooner.
+const (
+	shotTourBoot   = 6 * time.Second
+	shotDumpBoot   = 2 * time.Second
+	shotDumpSettle = 100 * time.Millisecond
+)
 
 // shotBusyLimit is how much longer than its settle time a screen may keep its
 // loading card up before it is captured anyway.
@@ -269,6 +328,7 @@ var shotTour struct {
 	phase   int
 	at      time.Time
 	retried bool
+	armed   bool
 	wrote   int
 }
 
@@ -280,6 +340,114 @@ func shotTourSteps() []shotStep {
 		{file: "settings.png", settle: 3 * time.Second, enter: shotEnterSettings, ready: shotOnSettings},
 		{file: "ambient.png", settle: 4 * time.Second, enter: shotEnterDock, ready: shotOnDock, leave: shotLeaveDock},
 	}
+}
+
+// shotTourOutDir is where the current walk writes: the tour's folder or the
+// scene dump's.
+func shotTourOutDir() string {
+	if shotMode.dumpDir != "" {
+		return shotMode.dumpDir
+	}
+	return shotMode.tourDir
+}
+
+// shotDumpSteps lists every configured scene as a capture at one canvas size.
+// The app's pages are config scenes, the Browser included (main.go injects it
+// before the window opens), so this is the whole set a scene dump covers. Exit
+// is a command rather than a page — opening it asks the app to quit — so it is
+// left out. A repeated scene name gets -2, -3, … so a picture is never
+// overwritten.
+func shotDumpSteps(c *Config, w, h int32) []shotStep {
+	if c == nil || w <= 0 || h <= 0 {
+		return nil
+	}
+	used := make(map[string]int, len(c.Scenes))
+	steps := make([]shotStep, 0, len(c.Scenes))
+	for i := range c.Scenes {
+		name := strings.TrimSpace(c.Scenes[i].Name)
+		if name == "" || strings.EqualFold(name, "exit") {
+			continue
+		}
+		slug := shotSlugOf(name)
+		used[slug]++
+		if n := used[slug]; n > 1 {
+			slug = fmt.Sprintf("%s-%d", slug, n)
+		}
+		idx := i
+		steps = append(steps, shotStep{
+			file:   fmt.Sprintf("%dx%d/%s.png", w, h, slug),
+			settle: shotDumpSettle,
+			enter:  func(c *Config) bool { return shotDumpEnter(c, idx) },
+			ready:  func(c *Config) bool { return shotOnScene(c, idx) },
+		})
+	}
+	return steps
+}
+
+// shotDumpEnter switches to a scene and finishes the fade at once. A dump is
+// a set of stills, not a walk to watch: the usual fade would cost about a
+// second per page and put a 106-page, two-size dump well past a minute.
+// completeSceneTransition does the same arrival work the end of a fade does
+// (scene entry, caches, focus), and the walk then waits for the frame that is
+// drawn next.
+func shotDumpEnter(c *Config, idx int) bool {
+	if !shotGoScene(c, idx) {
+		return false
+	}
+	if transitionPhase != "none" {
+		completeSceneTransition(c)
+		transitionPhase = "none"
+		sceneFadeAlpha = 0
+	}
+	return true
+}
+
+// shotSlugOf is the file-name form of a scene name: lower-case letters and
+// digits only.
+func shotSlugOf(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "screen"
+	}
+	return b.String()
+}
+
+// handleSceneDumpCommand runs the scene dump before SDL starts, like the other
+// command modes in main.go. Without --canvas it is the parent: it starts one
+// child of itself per canvas size, so every scene is laid out twice rather
+// than scaled from one canvas. A child has --canvas and runs the app with the
+// dump engine in shotTick. The output is
+// <dir>/1280x720/<scene>.png and <dir>/960x720/<scene>.png.
+func handleSceneDumpCommand(args []string) (bool, int) {
+	opts := shotParseOptions(args, os.Getenv)
+	if opts.dumpDir == "" || opts.canvasW > 0 {
+		return false, 0
+	}
+	dir, err := filepath.Abs(opts.dumpDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "scene dump: %v\n", err)
+		return true, 1
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "scene dump: %v\n", err)
+		return true, 1
+	}
+	for _, size := range [][2]int32{{1280, 720}, {960, 720}} {
+		cmd := exec.Command(exe, "--scene-dump", dir, "--canvas", fmt.Sprintf("%dx%d", size[0], size[1]))
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "scene dump at %dx%d: %v\n", size[0], size[1], err)
+			return true, 1
+		}
+	}
+	fmt.Printf("scene dump: every scene at 1280x720 and 960x720 in %s\n", dir)
+	return true, 0
 }
 
 // shotEnterHome goes back to Home.
@@ -367,13 +535,17 @@ func shotOnScene(c *Config, idx int) bool {
 func shotTourAdvance(renderer *sdl.Renderer, c *Config, now time.Time) {
 	switch shotTour.phase {
 	case shotPhaseBoot:
-		if now.Sub(shotTour.at) >= shotTourBoot {
+		boot := shotTourBoot
+		if shotMode.dumpDir != "" {
+			boot = shotDumpBoot
+		}
+		if now.Sub(shotTour.at) >= boot {
 			shotTour.phase = shotPhaseEnter
 		}
 	case shotPhaseEnter:
 		if shotTour.i >= len(shotTour.steps) {
 			logInfo("screenshot", "tour: wrote %d of %d screens to %s",
-				shotTour.wrote, len(shotTour.steps), shotMode.tourDir)
+				shotTour.wrote, len(shotTour.steps), shotTourOutDir())
 			shotTour.phase = shotPhaseDone
 			requestAppExit()
 			return
@@ -395,7 +567,11 @@ func shotTourAdvance(renderer *sdl.Renderer, c *Config, now time.Time) {
 			return
 		}
 		waited := now.Sub(shotTour.at)
-		if waited >= 3*time.Second && !shotTour.retried {
+		retryAfter := 3 * time.Second
+		if shotMode.dumpDir != "" {
+			retryAfter = 750 * time.Millisecond
+		}
+		if waited >= retryAfter && !shotTour.retried {
 			// A switch asked for while another transition ran is dropped
 			// (switchScene); ask once more.
 			shotTour.retried = true
@@ -417,10 +593,13 @@ func shotTourAdvance(renderer *sdl.Renderer, c *Config, now time.Time) {
 			shotTour.phase, shotTour.at, shotTour.retried = shotPhaseWait, now, false
 			return
 		}
-		if shotBusy(c) && settled < step.settle+shotBusyLimit {
+		// A scene dump captures the page at rest; a feed that is still loading
+		// must not stall the walk (the loading card is part of that page's
+		// state), while the README tour waits it out.
+		if shotMode.dumpDir == "" && shotBusy(c) && settled < step.settle+shotBusyLimit {
 			return
 		}
-		path := filepath.Join(shotMode.tourDir, step.file)
+		path := filepath.Join(shotTourOutDir(), step.file)
 		if err := shotWriteFrame(renderer, path); err != nil {
 			logWarn("screenshot", "tour: %s: %v", step.file, err)
 		} else {
@@ -492,16 +671,7 @@ func shotSceneSlug() string {
 	if c == nil || currentSceneIndex < 0 || currentSceneIndex >= len(c.Scenes) {
 		return "screen"
 	}
-	var b strings.Builder
-	for _, r := range strings.ToLower(c.Scenes[currentSceneIndex].Name) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	if b.Len() == 0 {
-		return "screen"
-	}
-	return b.String()
+	return shotSlugOf(c.Scenes[currentSceneIndex].Name)
 }
 
 // shotWriteFrame saves the frame drawn this tick as a PNG at path. It reads

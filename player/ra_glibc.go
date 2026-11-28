@@ -24,7 +24,9 @@ package main
 // RetroArch binary, so the firmware's launch.sh — which calls
 // $RA_DIR/ra64.trimui by path — starts the wrapper instead. The wrapper execs
 // the private loader with the runtime first on the library path and the real
-// binary as the program. Two more bind mounts keep RetroArch's view of itself:
+// binary as the program. It also gives the game a /dev/shm of its own when the
+// firmware has none, which a core build's POSIX shared memory needs
+// (JH-HW3M9G). Two more bind mounts keep RetroArch's view of itself:
 // the loader is reached as <ns>/v<i>/ra64.trimui inside a bind of RetroArch's
 // folder, so /proc/self/exe names a file called ra64.trimui in a folder holding
 // RetroArch's own files (its ":" paths and the process name stay right), and
@@ -742,8 +744,18 @@ const raGlibcProbeEnv = "JUKAHUB_RA_GLIBC_PROBE"
 // raGlibcSetupText is the first program of a game launched on the runtime. Its
 // arguments are JukaHub's own mount namespace and the game's command. binds is
 // one rag_bind line per RetroArch. Whatever fails, the game's own command runs.
-func raGlibcSetupText(mountBin, readlinkBin, binds string) string {
+//
+// It also gives the game a /dev/shm when the firmware has none: the buildbot's
+// DuckStation and SwanStation builds put their memory arena in a POSIX shared
+// mapping, shm_open returns ENOENT without that folder, and the game stops with
+// "Failed to allocate memory" (JH-HW3M9G). The tmpfs is the namespace's own, so
+// nothing outside the game sees it.
+func raGlibcSetupText(mountBin, mkdirBin, readlinkBin, binds string) string {
 	m := shellQuote(mountBin)
+	makeShm := ":"
+	if mkdirBin != "" {
+		makeShm = shellQuote(mkdirBin) + " -p /dev/shm 2>/dev/null"
+	}
 	return "#!/bin/sh\n" +
 		"# Written by JukaHub (ra_glibc.go). The first program of a game JukaHub starts\n" +
 		"# on its private C library (glibc " + privateGlibcVersion + "), in the game's own mount namespace:\n" +
@@ -756,6 +768,21 @@ func raGlibcSetupText(mountBin, readlinkBin, binds string) string {
 		"\techo \"jukahub: RetroArch stays on the firmware's C library: the game has no mount namespace of its own\" >&2\n" +
 		"\texec \"$@\"\n" +
 		"fi\n" +
+		"# A firmware with no /dev/shm: a core that keeps its memory in a POSIX\n" +
+		"# shared mapping (shm_open) fails to allocate it there. The game's own\n" +
+		"# namespace can have one, and only its processes see it.\n" +
+		"rag_shm() {\n" +
+		"\tif [ -d /dev/shm ] && [ -w /dev/shm ]; then\n" +
+		"\t\treturn 0\n" +
+		"\tfi\n" +
+		"\t" + makeShm + "\n" +
+		"\tif " + m + " -n -t tmpfs -o mode=1777 tmpfs /dev/shm 2>/dev/null; then\n" +
+		"\t\techo \"jukahub: this firmware has no /dev/shm, so the game has one of its own\" >&2\n" +
+		"\t\treturn 0\n" +
+		"\tfi\n" +
+		"\techo \"jukahub: /dev/shm is missing and could not be made; a core that keeps its memory in shared memory may not start\" >&2\n" +
+		"}\n" +
+		"rag_shm\n" +
 		"rag_bind() {\n" +
 		"\t" + m + " -n -o bind \"$1\" \"$2\" &&\n" +
 		"\t\t" + m + " -n -o bind \"$1\" \"$3\" &&\n" +
@@ -842,7 +869,7 @@ func raGlibcWriteFiles(ras []string, loader, libDir string, extra []string) (raG
 	if err != nil {
 		return files, err
 	}
-	mountBin, readlinkBin := raGlibcTool("mount"), raGlibcTool("readlink")
+	mountBin, mkdirBin, readlinkBin := raGlibcTool("mount"), raGlibcTool("mkdir"), raGlibcTool("readlink")
 	if mountBin == "" || readlinkBin == "" {
 		return files, errors.New("the firmware has no mount or readlink program")
 	}
@@ -879,7 +906,7 @@ func raGlibcWriteFiles(ras []string, loader, libDir string, extra []string) (raG
 		files.view = append(files.view, filepath.Join(view, name))
 		files.real = append(files.real, filepath.Join(real, name))
 	}
-	setup, err := raGlibcWriteOnce(dir, "setup-", raGlibcSetupText(mountBin, readlinkBin, binds.String()))
+	setup, err := raGlibcWriteOnce(dir, "setup-", raGlibcSetupText(mountBin, mkdirBin, readlinkBin, binds.String()))
 	if err != nil {
 		return files, err
 	}

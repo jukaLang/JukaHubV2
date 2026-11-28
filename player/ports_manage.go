@@ -212,7 +212,7 @@ func portsPanelActivateOption(e portEntry) {
 	case portActUninstall:
 		if portsPanel.confirmAt.IsZero() || time.Since(portsPanel.confirmAt) > portUninstallConfirm {
 			portsPanel.confirmAt = time.Now()
-			ShowToast("Press A again to delete "+port.Name+" — its saves go too", ToastKindWarning)
+			ShowToast(hintSentence("Press %s again to delete ", "A", "Delete")+port.Name+" — its saves go too", ToastKindWarning)
 			return
 		}
 		portsPanel.confirmAt = time.Time{}

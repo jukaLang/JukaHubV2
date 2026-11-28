@@ -667,9 +667,9 @@ func filesFriendlyError(err error) string {
 func filesListErrorText(err error) (string, string) {
 	switch {
 	case errors.Is(err, fs.ErrPermission):
-		return "No permission to open this folder", "JukaHub cannot read it. Press B to go back."
+		return "No permission to open this folder", hintSentence("JukaHub cannot read it. Press %s to go back.", "B", "Back")
 	case errors.Is(err, fs.ErrNotExist):
-		return "This folder is gone", "It was removed or its drive was ejected. Press B to go back."
+		return "This folder is gone", hintSentence("It was removed or its drive was ejected. Press %s to go back.", "B", "Back")
 	}
 	return "This folder cannot be read", filesFriendlyError(err)
 }

@@ -135,6 +135,31 @@ func themePresetIsLight(name string) bool {
 	return wcagLuminance(sdl.Color{R: uint8(c.R), G: uint8(c.G), B: uint8(c.B), A: 255}) > 0.4
 }
 
+// seasonalPaletteFor maps the time of year to one of the shipped colour
+// presets. The palettes are only a starting point: a theme picked by hand for
+// the day still wins over the season.
+func seasonalPaletteFor(month time.Month) string {
+	switch month {
+	case time.December, time.January, time.February:
+		return "lavender"
+	case time.March, time.April, time.May:
+		return "sakura"
+	case time.June, time.July, time.August:
+		return "sand"
+	default:
+		return "sunset"
+	}
+}
+
+// seasonalThemeEnabled reads the opt-in switch. Off by default: the existing
+// day/night schedule keeps exactly the themes the user chose.
+func seasonalThemeEnabled(config *Config) bool {
+	if config == nil {
+		return false
+	}
+	return customBool(config.Variables.Custom, "seasonalTheme", false)
+}
+
 // themeScheduleSlot is the theme stored under key, or def when it is missing,
 // unknown, a total conversion or an accessibility palette (those stay with the
 // Accessibility panel, and the rows do not offer them).
@@ -181,6 +206,11 @@ func themeScheduleWanted(config *Config, now time.Time) (string, bool) {
 		themeScheduleMinutes(config, themeDayStartKey, themeDefaultDayStart),
 		themeScheduleMinutes(config, themeNightStartKey, themeDefaultNightStart))
 	if day {
+		if seasonalThemeEnabled(config) {
+			if stored, ok := customString(config.Variables.Custom, themeDayKey); !ok || strings.TrimSpace(stored) == "" {
+				return seasonalPaletteFor(now.Month()), true
+			}
+		}
 		return themeScheduleSlot(config, themeDayKey, themeDefaultDay), true
 	}
 	return themeScheduleSlot(config, themeNightKey, themeDefaultNight), false
@@ -313,6 +343,22 @@ func themeScheduleToggleRow() setRow {
 			}
 			setStoreBool(c, "timeOfDayTheme", on)
 			widgetToggleSideEffect(c, "timeOfDayTheme", on)
+		},
+	}
+}
+
+// seasonalThemeRow opts into a palette that follows the date. A day theme
+// picked by hand still takes priority over the season.
+func seasonalThemeRow() setRow {
+	return setRow{
+		ID: "seasonalTheme", Label: "Seasonal palette", Kind: setKindToggle,
+		Detail:   setStatic("Use a palette for the time of year as the day theme. A theme you pick by hand still wins."),
+		Visible:  func(c *Config) bool { return timeOfDayThemeEnabled(c) },
+		Disabled: func(c *Config) bool { return !timeOfDayThemeEnabled(c) },
+		Get:      seasonalThemeEnabled,
+		Set: func(c *Config, on bool) {
+			setStoreBool(c, "seasonalTheme", on)
+			widgetToggleSideEffect(c, "seasonalTheme", on)
 		},
 	}
 }

@@ -313,7 +313,7 @@ func jukaosSettingsRows(*Config) []setRow {
 	if session {
 		rows = append(rows, setRow{
 			ID: "jukaosReturn", Label: "Return to " + fw, Kind: setKindAction,
-			Detail: setStatic("Undo the session's changes and go back to " + fw + " (press A twice)"),
+			Detail: setStatic("Undo the session's changes and go back to " + fw + hintSentence(" (press %s twice)", "A", "Confirm")),
 			Open:   jukaosReturnPress,
 		})
 	}
@@ -655,7 +655,7 @@ func jukaosReturnPress(*Config) {
 	}
 	jukaosLive.mu.Unlock()
 	if !armed {
-		setToast("Press A again to return to " + fw)
+		setToast(hintSentence("Press %s again to return to ", "A", "Confirm") + fw)
 		return
 	}
 	setToast("Returning to " + fw + "…")

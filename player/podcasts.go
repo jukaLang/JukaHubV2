@@ -56,6 +56,9 @@ type podcastEpisode struct {
 	URL       string
 	Published time.Time
 	Duration  float64 // seconds, 0 when the feed did not say
+	// ChaptersURL is the Podcasting 2.0 chapters JSON, when the feed names
+	// one. The list itself is fetched lazily when the episode plays.
+	ChaptersURL string
 }
 
 // podcastShow is one subscription: the feed's own title and its newest
@@ -164,6 +167,9 @@ func podcastEpisodeMeta(ep podcastEpisode) string {
 	if ep.Duration > 0 {
 		parts = append(parts, formatMediaDuration(int(ep.Duration)))
 	}
+	if ep.ChaptersURL != "" {
+		parts = append(parts, "chapters")
+	}
 	return strings.Join(parts, " · ")
 }
 
@@ -215,10 +221,11 @@ func podcastParseFeed(feedURL, data string) podcastShow {
 			title = podcastEpisodeTitleFromURL(enc)
 		}
 		ep := podcastEpisode{
-			Title:     title,
-			URL:       enc,
-			Published: podcastParseDate(rssTag(block, "pubDate")),
-			Duration:  podcastParseDuration(rssTag(block, "itunes:duration")),
+			Title:       title,
+			URL:         enc,
+			Published:   podcastParseDate(rssTag(block, "pubDate")),
+			Duration:    podcastParseDuration(rssTag(block, "itunes:duration")),
+			ChaptersURL: podcastChaptersURL(block),
 		}
 		seen[enc] = true
 		show.Episodes = append(show.Episodes, ep)
@@ -485,7 +492,12 @@ func podcastEpisodeTracks(show podcastShow) []musicTrack {
 		if name == "" {
 			name = podcastEpisodeTitleFromURL(ep.URL)
 		}
-		tracks = append(tracks, musicTrack{Path: ep.URL, Name: name, Duration: ep.Duration})
+		path := ep.URL
+		if local := podcastOfflinePath(ep.URL); local != "" {
+			path = local
+		}
+		tracks = append(tracks, musicTrack{Path: path, Name: name, Duration: ep.Duration,
+			Podcast: true, PodcastURL: ep.URL})
 	}
 	return tracks
 }
@@ -503,6 +515,10 @@ func playPodcastEpisode(config *Config, show podcastShow, index int) bool {
 	// The queue alone plays nothing: this said "Playing" over a silent player
 	// until the user found the play button.
 	musicPlayTrack(index)
+	// Podcasting 2.0 chapters live in a sidecar JSON. Load them once, off the
+	// render thread, into the player's own chapter cache; a downloaded file
+	// with embedded chapters is probed by the player as usual.
+	go podcastLoadEpisodeChapters(show.Episodes[index], tracks[index].Path)
 	trophyEvent(tkPodcastPlay)
 	// The Continue timeline is the one place that answers "what was I in the
 	// middle of?" across every media type, so a started episode belongs on it.
@@ -867,6 +883,12 @@ func handlePodcastPanelKey(e *sdl.KeyboardEvent, config *Config) bool {
 		podcastPanelAskForFeed()
 	case sdl.K_r:
 		podcastPanelRefresh()
+	case sdl.K_d:
+		podcastPanelDownloadSelected()
+	case sdl.K_o:
+		podcastPanelExportOPML()
+	case sdl.K_i:
+		podcastPanelImportOPML()
 	case sdl.K_DELETE, sdl.K_BACKSPACE:
 		podcastPanelRemove()
 	case sdl.K_PAGEUP:
@@ -1173,6 +1195,8 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 		FooterHint{"</> / Left Right", "Columns"},
 		FooterHint{"X", "Add Feed"},
 		FooterHint{"Y / R", "Refresh"},
+		FooterHint{"D", "Download"},
+		FooterHint{"O / I", "OPML"},
 		FooterHint{"Start / Del", "Unsubscribe"},
 		FooterHint{"B / Esc", "Close"},
 	)
@@ -1181,6 +1205,8 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 			FooterHint{"A", "Open"},
 			FooterHint{"X", "Add Feed"},
 			FooterHint{"Y", "Refresh"},
+			FooterHint{"D", "Download"},
+			FooterHint{"O / I", "OPML"},
 			FooterHint{"Start / Del", "Remove"},
 			FooterHint{"B / Esc", "Close"},
 		)

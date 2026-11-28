@@ -55,6 +55,14 @@ process name and RetroArch's `:` paths stay right. RetroArch's children
 mounts exist only inside that game's namespace and end with it; JukaHub,
 MainUI and the Emulators page see the card unchanged.
 
+A firmware with no `/dev/shm` gets one inside the game's namespace too, a
+tmpfs only the game's own processes see. The buildbot's DuckStation and
+SwanStation builds keep their memory arena in a POSIX shared mapping, and
+without the folder `shm_open` returns `ENOENT` and the core stops the game
+after a second with `Failed to allocate memory` (JH-HW3M9G). The setup script
+takes a `/dev/shm` the firmware already has as it is, and when it cannot make
+one it says so on the launch's stderr instead of failing silently.
+
 Before a RetroArch first runs on a runtime build, JukaHub probes it: its
 libraries are listed and bound (as `ldd -r` does) once by the firmware's
 loader and once through the same namespace, wrapper and private loader a game

@@ -144,9 +144,14 @@ func launchRecordNew(kind, title, launcher string) *launchRecord {
 	}
 }
 
+// launchKindLibraryGame names a library game's launch, in a report and on the
+// launch card (a failure of one may be asked again in another emulator,
+// emupicker.go).
+const launchKindLibraryGame = "Library game"
+
 // launchRecordForGame starts the record of a library game's launch.
 func launchRecordForGame(game libraryGame, launcher string) *launchRecord {
-	rec := launchRecordNew("Library game", game.Label(), launcher)
+	rec := launchRecordNew(launchKindLibraryGame, game.Label(), launcher)
 	rec.System = game.System
 	rec.ROM = game.Path
 	return rec
@@ -1270,6 +1275,9 @@ func launchLibraryFailed(rec *launchRecord, err error) error {
 		return err
 	}
 	showLaunchFailureRecord(rec, err, "")
+	// Starting it again would pick the emulator that just failed it: closing
+	// the card asks which emulator to use instead (emupicker.go).
+	emuPickScheduleRetry(rec)
 	return &launchReportedError{err: err}
 }
 

@@ -709,7 +709,7 @@ func psHelpersFailText(err error) string {
 // saved. "), so that news is not lost.
 func psHelperFailToast(lead string, err error) string {
 	if errors.Is(err, errPSHelpersNoInternet) {
-		text := "Remote Play needs a one-time download, and " + psHelperNoInternetText() + " — press A again once it is back"
+		text := "Remote Play needs a one-time download, and " + psHelperNoInternetText() + hintSentence(" — press %s again once it is back", "A", "Retry")
 		return lead + text
 	}
 	reason := psHelpersFailText(err)
@@ -1686,12 +1686,12 @@ func psHelpersReplayPlay(host, label string, err error) {
 		return
 	}
 	if !chiakiPanel.open {
-		ShowToast("PS Remote Play is installed — open it and press A on "+label+" to stream", ToastKindSuccess)
+		ShowToast("PS Remote Play is installed — open it and "+hintSentence("press %s on ", "A", "Play")+label+" to stream", ToastKindSuccess)
 		return
 	}
 	if !psHelpersPanelFree() {
 		if !psHelpersQuietNow() {
-			ShowToast("PS Remote Play is installed — press A on "+label+" to stream", ToastKindSuccess)
+			ShowToast("PS Remote Play is installed — "+hintSentence("press %s on ", "A", "Play")+label+" to stream", ToastKindSuccess)
 		}
 		return
 	}
@@ -1748,7 +1748,7 @@ func psHelpersResumePIN(host string, mustHave bool, err error) {
 	}
 	if !chiakiPanel.open {
 		if err == nil {
-			ShowToast("PS Remote Play is installed — open it and press A on the PS5 to pair it", ToastKindSuccess)
+			ShowToast("PS Remote Play is installed — open it and "+hintSentence("press %s on the PS5 to pair it", "A", "Pair"), ToastKindSuccess)
 		}
 		return
 	}
@@ -1758,7 +1758,7 @@ func psHelpersResumePIN(host string, mustHave bool, err error) {
 		case err != nil:
 			ShowToast(psHelperFailToast("", err)+" · a PS4 pairs without it", ToastKindWarning)
 		default:
-			ShowToast("PS Remote Play is installed — press A on the PS5 to pair it", ToastKindSuccess)
+			ShowToast("PS Remote Play is installed — "+hintSentence("press %s on the PS5 to pair it", "A", "Pair"), ToastKindSuccess)
 		}
 		return
 	}

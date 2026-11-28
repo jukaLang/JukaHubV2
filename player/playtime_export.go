@@ -50,7 +50,7 @@ func playtimeExportCSV(rows []playtimeExportRow) []byte {
 // playtimeExportHTML renders the same rows as one page a browser can open:
 // the totals, then the table. Every value is escaped, since a game's title is
 // a file name and may hold anything.
-func playtimeExportHTML(rows []playtimeExportRow, now string) []byte {
+func playtimeExportHTML(rows []playtimeExportRow, sessions []playtimeSession, now string) []byte {
 	var total int64
 	for _, r := range rows {
 		total += r.Seconds
@@ -62,6 +62,9 @@ func playtimeExportHTML(rows []playtimeExportRow, now string) []byte {
 		"border-bottom:1px solid #ddd}th{font-weight:600}td.n{text-align:right;font-variant-numeric:tabular-nums}</style>")
 	b.WriteString("<h1>Playtime</h1><p>")
 	b.WriteString(html.EscapeString(fmt.Sprintf("%d games · %s in total · exported %s", len(rows), formatPlaytime(total), now)))
+	style, styleDetail := playStyleFromSessions(sessions)
+	b.WriteString(" · ")
+	b.WriteString(html.EscapeString(fmt.Sprintf("Play style: %s (%s)", style, styleDetail)))
 	b.WriteString("</p><table><tr><th>Game</th><th>Console</th><th>Time</th><th class=\"n\">Hours</th><th>Last played</th></tr>")
 	for _, r := range rows {
 		b.WriteString("<tr><td>")
@@ -93,7 +96,7 @@ func playtimeExportFiles(dir string, rows []playtimeExportRow, now string) (csvP
 	if err := AtomicWrite(csvPath, playtimeExportCSV(rows), 0o644); err != nil {
 		return "", "", err
 	}
-	if err := AtomicWrite(htmlPath, playtimeExportHTML(rows, now), 0o644); err != nil {
+	if err := AtomicWrite(htmlPath, playtimeExportHTML(rows, playtime.sessions, now), 0o644); err != nil {
 		return "", "", err
 	}
 	return csvPath, htmlPath, nil

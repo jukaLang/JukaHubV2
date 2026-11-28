@@ -72,7 +72,7 @@ func lookpackBootLogoArmText() string {
 	if lookpackStagedBootLogo() != "" {
 		what = "the look pack's boot logo"
 	}
-	return "Press A again to install " + what + " — the current one is kept on the SD card"
+	return hintSentence("Press %s again to install ", "A", "Install") + what + " — the current one is kept on the SD card"
 }
 
 // lookpackBootLogoPicture renders a pack's boot logo at the stock logo's size:

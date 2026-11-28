@@ -1034,6 +1034,7 @@ func setBuildSections() []setSection {
 				// Light & dark by time of day: the switch, the two themes and the
 				// two times they start (themeschedule.go).
 				themeScheduleToggleRow(),
+				seasonalThemeRow(),
 				themeScheduleThemeRow(true),
 				themeScheduleThemeRow(false),
 				themeScheduleTimeRow(true),

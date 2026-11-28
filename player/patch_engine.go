@@ -466,6 +466,19 @@ func installedPatchVersions(config *Config) map[PatchComponent]string {
 	} else {
 		m[ComponentTools] = "Not installed"
 	}
+	// The JavaScript runtime JukaHub pinned next to its yt-dlp (Windows): its
+	// version is probed in the background, like the helpers' versions.
+	if path, managed := ytdlpManagedPath(config); managed && path != "" {
+		if qjs := ytDlpJSRuntimePath(path); qjs != "" {
+			if v := ytdlpJSRuntimeInstalledVersion(qjs); v != "" {
+				if m[ComponentTools] == "Unknown" || m[ComponentTools] == "Not installed" {
+					m[ComponentTools] = "QuickJS-NG " + v
+				} else {
+					m[ComponentTools] += " · QuickJS-NG " + v
+				}
+			}
+		}
+	}
 	return m
 }
 
@@ -549,7 +562,7 @@ func ensureHelperToolCtx(ctx context.Context, tool string, config *Config) error
 	if !IsOnline() {
 		logPatch("[TOOLS] %s missing but the device is offline; not downloading", tool)
 		installBarBegin(tool)
-		installBarFailRetry(tool, "No internet — connect WiFi, then press A")
+		installBarFailRetry(tool, hintSentence("No internet — connect WiFi, then press %s", "A", "Retry"))
 		return errToolsOffline
 	}
 	if err := ctx.Err(); err != nil {
@@ -592,7 +605,7 @@ func toolInstallFailureReason(err error) string {
 		return ""
 	}
 	if !IsOnline() {
-		return "No internet — connect WiFi, then press A"
+		return hintSentence("No internet — connect WiFi, then press %s", "A", "Retry")
 	}
 	// A clock reset to 1970 or a firmware with no certificate store fails
 	// every download with an x509 line no one can act on; both have a fix the
@@ -606,7 +619,7 @@ func toolInstallFailureReason(err error) string {
 		return firstLine(reasoned.reason)
 	}
 	if isDiskFullError(err) {
-		return "SD card is full — free some space, then press A"
+		return hintSentence("SD card is full — free some space, then press %s", "A", "Retry")
 	}
 	line, _, _ := strings.Cut(err.Error(), "\n")
 	return firstLine(stripURLs(line))
@@ -926,7 +939,7 @@ func retryHelperToolInstall(tool string) {
 			return
 		}
 		if _, ok := checkToolPresence(tool); !ok {
-			ShowToast("Could not install "+tool+" — press A to retry", ToastKindError)
+			ShowToast("Could not install "+tool+hintSentence(" — press %s to retry", "A", "Retry"), ToastKindError)
 			refreshToolHealth()
 			return
 		}

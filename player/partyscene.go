@@ -238,7 +238,7 @@ func partyBuildRoom(m *partyModel, now time.Time) {
 	m.npProgress = -1
 	if snap.Playback.URL == "" {
 		m.npTitle = "Nothing playing yet"
-		m.npHint = "Add a video below, then press A on it to start it for everyone."
+		m.npHint = hintSentence("Add a video below, then press %s on it to start it for everyone.", "A", "Start")
 	} else {
 		m.npTitle = snap.Playback.Title
 		if m.npTitle == "" {

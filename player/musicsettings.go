@@ -25,6 +25,8 @@ const (
 	msRowScreenMode
 	msRowBackground
 	msRowBitPerfect
+	msRowCrossfade
+	msRowReplayGain
 	msRowPEQ
 	msRowPlaylists
 	msRowShortcuts
@@ -66,6 +68,8 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowGameQuiet, "Quiet the game while music plays", "Music started from the in-game menu (Select + L2) mutes a RetroArch game's own sound until the music stops."},
 		{msRowMusicTidy, "Tidy the Music folder", "After a library scan, songs loose in Music move into Music/Singles and an album folder dropped into Music moves to Music/Artist/Album. Nothing is ever overwritten."},
 		{msRowBitPerfect, "Bit-perfect DAC output", "Bypass the equaliser, tempo and spatial audio. With a USB DAC, lossless tracks play at their own rate and bit depth, unscaled (use the DAC's volume); UI sounds are muted while they do."},
+		{msRowCrossfade, "Crossfade", "Overlap the end of one track with the next: 0 to 10 seconds, off at 0. The join is sample-accurate and never runs on the bit-perfect path."},
+		{msRowReplayGain, "ReplayGain", "Use a track's ReplayGain / album gain tags, with peak limiting so a boosted track cannot clip. Off on the bit-perfect path."},
 		{msRowPEQ, "31-band PEQ", "One-third-octave equaliser from 20 Hz to 20 kHz, with the iPod's presets. A opens it (L2 or G in the player); Left/Right switch it on or off."},
 		{msRowAutoEQ, "AutoEQ headphones", "Correct your headphones to neutral with an AutoEq profile, searched offline once the list is downloaded. Your own ParametricEQ.txt files in Music/AutoEQ are listed first."},
 		{msRowSoundFX, "Sound effects", "Tape Mode (wow and flutter, hiss, saturation, roll-off, tape speed), reverb, ping-pong delay, chorus, flanger and the playback speed. R2 or X in the player."},
@@ -138,6 +142,13 @@ func musicSettingsValue(row musicSettingsRow, config *Config) string {
 			return "On"
 		}
 		return "Off"
+	case msRowCrossfade:
+		if sec := musicCrossfadeSeconds(config); sec > 0 {
+			return fmt.Sprintf("%ds", sec)
+		}
+		return "Off"
+	case msRowReplayGain:
+		return onOff(musicReplayGainEnabled(config))
 	case msRowGameMusic:
 		return onOff(musicGameKeepEnabled(config))
 	case msRowGameLevel:
@@ -227,6 +238,24 @@ func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
 		} else {
 			showToast("Bit-perfect off", ToastInfo())
 		}
+	case msRowCrossfade:
+		sec := musicCrossfadeSeconds(config) + dir
+		if sec < 0 {
+			sec = 0
+		}
+		if sec > musicCrossfadeMax {
+			sec = musicCrossfadeMax
+		}
+		musicSetCrossfadeSeconds(config, sec)
+		if sec == 0 {
+			showToast("Crossfade off", ToastInfo())
+		} else {
+			showToast(fmt.Sprintf("Crossfade: %ds", sec), ToastInfo())
+		}
+	case msRowReplayGain:
+		on := !musicReplayGainEnabled(config)
+		musicSetReplayGainEnabled(config, on)
+		showToast("ReplayGain: "+onOff(on), ToastInfo())
 	case msRowPEQ:
 		musicSetPEQEnabled(!musicEQ.enabled, config)
 		showToast("PEQ: "+onOff(musicEQ.enabled), ToastInfo())

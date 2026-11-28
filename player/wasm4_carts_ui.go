@@ -322,9 +322,9 @@ func wasm4CartsRender(renderer *sdl.Renderer, config *Config) {
 		title, text := "Reading the carts list…", "wasm4.org's games appear here in a moment."
 		if !w4c.loading {
 			title = "No carts list yet"
-			text = "Connect to the internet, then press A to read wasm4.org's list."
+			text = hintSentence("Connect to the internet, then press %s to read wasm4.org's list.", "A", "Retry")
 			if w4c.loadErr != "" && w4c.loadErr != "offline" {
-				text = "The list could not be read (" + w4c.loadErr + "). Press A to try again."
+				text = "The list could not be read (" + w4c.loadErr + "). " + hintSentence("Press %s to try again.", "A", "Retry")
 			}
 		}
 		tbxDrawEmpty(renderer, config, body, "rom", title, text)

@@ -609,7 +609,7 @@ func paintSheetRows() []paintRow {
 func paintToolHelp(t paintTool) string {
 	switch t {
 	case paintPencil:
-		return "Hold A and move to draw"
+		return hintSentence("Hold %s and move to draw", "A", "Draw")
 	case paintEraser:
 		return "Clears pixels; on a screenshot it brings the picture back"
 	case paintLine:

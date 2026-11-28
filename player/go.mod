@@ -1,20 +1,20 @@
 module jukahub/JukaHub
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/bwmarrin/discordgo v0.29.0
-	github.com/dlclark/regexp2/v2 v2.13.1
+	github.com/dlclark/regexp2/v2 v2.13.2
 	github.com/dop251/goja v0.0.0-20261102223426-a177d211bf60
 	github.com/gorilla/websocket v1.5.3
 	github.com/grandcat/zeroconf v1.0.0
-	github.com/klauspost/compress v1.20.4
-	github.com/pkg/sftp v1.13.12
+	github.com/klauspost/compress v1.20.5
+	github.com/pkg/sftp v1.13.13
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/thesyncim/gopus v0.2.3
-	github.com/tidwall/gjson v1.20.4
+	github.com/thesyncim/gopus v0.2.10
+	github.com/tidwall/gjson v1.20.6
 	github.com/ulikunitz/xz v0.5.17
 	github.com/veandco/go-sdl2 v0.4.40
 	go.etcd.io/bbolt v1.5.0

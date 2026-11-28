@@ -803,7 +803,7 @@ func mcInstallPort(kind mcPortKind) {
 			ShowToast(err.Error(), ToastKindWarning)
 			return
 		}
-		ShowToast("Installing PortMaster — then press A on "+spec.title+" again", ToastKindInfo)
+		ShowToast(hintSentence("Installing PortMaster — then press %s on ", "A", "Install")+spec.title+" again", ToastKindInfo)
 		return
 	}
 	err := mcStartPortInstall(kind, func() { mcScreen.portScanAt = time.Time{} })

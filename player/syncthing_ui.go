@@ -329,7 +329,7 @@ func syncthingPanelActivate() {
 	case syncthingRowRemove:
 		if savePanel.confirm != "syncthing-remove" {
 			savePanel.confirm = "syncthing-remove"
-			ShowToast("Press A again to remove Syncthing (saves stay)", ToastKindWarning)
+			ShowToast(hintSentence("Press %s again to remove Syncthing (saves stay)", "A", "Remove"), ToastKindWarning)
 			return
 		}
 		savePanel.confirm = ""

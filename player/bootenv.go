@@ -974,9 +974,9 @@ func bootEnvRowOpen(*Config) {
 	u.mu.Unlock()
 	if !armed {
 		if op == bootEnvOpOn {
-			bootEnvToast("Press A again to set the bootloader's log level to 1 (backed up first)", ToastKindInfo)
+			bootEnvToast(hintSentence("Press %s again to set the bootloader's log level to 1 (backed up first)", "A", "Set"), ToastKindInfo)
 		} else {
-			bootEnvToast("Press A again to put the bootloader's own log level back", ToastKindInfo)
+			bootEnvToast(hintSentence("Press %s again to put the bootloader's own log level back", "A", "Set"), ToastKindInfo)
 		}
 		return
 	}

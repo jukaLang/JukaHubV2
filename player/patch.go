@@ -93,9 +93,18 @@ func patchActions() []patchAction {
 	if path, managed := ytdlpManagedPath(appConfig); managed && path != "" {
 		sub := "Check GitHub for a newer release"
 		if v := helperToolVersion("yt-dlp"); v != "" {
-			sub = "Installed " + v + " · check now"
+			sub = "Installed " + v
+			if qjs := ytDlpJSRuntimePath(path); qjs != "" {
+				if qv := ytdlpJSRuntimeInstalledVersion(qjs); qv != "" {
+					sub += " · QuickJS-NG " + qv
+				}
+			}
+			sub += " · check now"
 		}
 		actions = append(actions, patchAction{ID: "ytdlp", Label: "Update yt-dlp now", Sub: sub})
+		if label, runtimeSub, ok := ytdlpJSRuntimeOffer(path); ok {
+			actions = append(actions, patchAction{ID: "ytdlpjs", Label: label, Sub: runtimeSub})
+		}
 	}
 	return actions
 }
@@ -574,9 +583,9 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 		if patchHoldActive && progress >= 1 {
 			confirmLabel = "Release A to confirm"
 		} else if patchHoldActive {
-			confirmLabel = "Hold A…"
+			confirmLabel = hintSentence("Hold %s…", "A", "Confirm")
 		} else {
-			confirmLabel = "Hold A to confirm"
+			confirmLabel = hintSentence("Hold %s to confirm", "A", "Confirm")
 		}
 		UIButton(renderer, config, patchConfirmRect, confirmLabel, UIButtonStyle{
 			Variant:      UIButtonCustom,
@@ -1020,6 +1029,8 @@ func patchActivate(config *Config) {
 			RunPatchOp("Exporting diagnostics", func(ctx context.Context) error { return OpExportDiagnostics(ctx, config) })
 		case "ytdlp":
 			patchYtDlpUpdate(config)
+		case "ytdlpjs":
+			patchYtDlpJSRuntime(config)
 		case "apply":
 			patchModal = &patchModalState{
 				ID:       "confirm-swap",

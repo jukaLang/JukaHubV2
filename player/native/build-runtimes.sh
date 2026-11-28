@@ -86,9 +86,10 @@ WINE_ZIP=JukaHub-Wine-linux-arm64.zip
 ANDROIDRT_SOURCES="player/androidrt/src player/androidrt/build-tsp.sh player/androidrt/launch.sh player/native/build-runtimes.sh .github/scripts/build-root.sh .gitattributes"
 
 # Box64, the x86_64 emulator the Windows-app runtime runs Wine with. The newest
-# stable release, fetched by the full id of the commit its tag names ("Bumped
-# version to v0.4.4", 2026-08-02) and checked against all of it, the way
-# build-helpers.sh fetches chiaki-ng. TEST-18: the Arch User Repository's
+# stable release, fetched by the full id of the commit its tag names,
+# 2f130fab1d6e1a4ee8a71dc60cfdfcc839ad192a ("Bumped version to v0.4.4",
+# 2026-08-02), and checked against all of it, the way build-helpers.sh fetches
+# chiaki-ng. Source: the Arch User Repository's
 # box64 0.4.4-1 PKGBUILD
 # (https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=box64, read
 # 2026-11-27) publishes sha256

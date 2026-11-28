@@ -52,6 +52,17 @@ func main() {
 	if handled, code := handleCastAudioTapCommand(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	// `JukaHub --scene-dump <dir>` walks every configured scene at both
+	// canvases before SDL starts; the parent starts one child per size.
+	if handled, code := handleSceneDumpCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
+	// "Add JukaHub to Steam": write a non-Steam shortcut without opening a
+	// window (steam_add.go).
+	if handled, code := handleSteamShortcutCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 
 	// JukaHub OS (jukaos_linux.go): launch.sh starts "JukaHub --os-session" in
 	// OS mode; this applies the layers in a private mount namespace and runs
@@ -574,6 +585,18 @@ func main() {
 	// Initialize scene index early so logging and window setup can safely
 	// reference the first scene.
 	currentSceneIndex = 0
+	// "Open with JukaHub": a file association or shortcut can name a scene
+	// and/or a file to open on this start.
+	if openScene, openFile, err := parseOpenWithArgs(os.Args[1:]); err == nil {
+		if openScene != "" {
+			if idx := sceneIndexExact(config, openScene); idx >= 0 {
+				currentSceneIndex = idx
+			}
+		}
+		if openFile != "" {
+			openWithFile = openFile
+		}
+	}
 
 	// Pick the logical canvas for this panel (the Brick/Hammer family needs the
 	// compact 4:3 canvas). Scene geometry is scaled once here, after every
@@ -614,7 +637,7 @@ func main() {
 	// Fullscreen still wins over everything: a session left in fullscreen must
 	// not come back as a small window on a monitor that has since gone away.
 	winX, winY := int32(sdl.WINDOWPOS_CENTERED), int32(sdl.WINDOWPOS_CENTERED)
-	if IsWindows() && !fullscreen {
+	if IsWindows() && !fullscreen && shotMode.canvasW == 0 {
 		if r, ok := rememberedWindowRect(config); ok {
 			winX, winY = int32(r.X), int32(r.Y)
 			screenW, screenH = r.W, r.H
@@ -625,6 +648,11 @@ func main() {
 				windowFlags |= sdl.WINDOW_BORDERLESS
 			}
 		}
+	}
+	// A scene dump lays the same pages out on a named canvas instead of the
+	// remembered window size (screenshotmode.go).
+	if shotMode.canvasW > 0 && shotMode.canvasH > 0 {
+		screenW, screenH = int(shotMode.canvasW), int(shotMode.canvasH)
 	}
 	startupMarkNow("modules")
 	LogSceneOp(config.Scenes[currentSceneIndex].Name, "init").Info("creating window",
@@ -904,6 +932,9 @@ func main() {
 	bootWorkDrain()
 	startupMarkNow("boot-work")
 	config.Variables.LoadingSpinner = false
+	// A file passed to "Open with JukaHub" is handled once the UI is up and
+	// the config watcher is running, not during boot.
+	applyOpenWithFile(config)
 	// Whatever pad is open at exit is closed then — not the one open now: a
 	// hot-plug (gamepad_hotplug.go) may have closed and replaced it, and a
 	// second Close on that handle would be a use-after-free in C.
@@ -3990,7 +4021,10 @@ func main() {
 		// loop's own "something moves by itself" answer; the end of the frame
 		// uses the same value for its cadence.
 		animating := html5GameActive() || transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
-			trophyOverlayActive() || chatBadgeAnimating()
+			trophyOverlayActive() || chatBadgeAnimating() ||
+			// A capture walk changes scenes by itself and must draw each one
+			// without waiting for input (dirtyframe.go would park it at 1 Hz).
+			shotMode.tourDir != "" || shotMode.dumpDir != ""
 		// A start's first frames and the work its deferred start is doing
 		// draw every frame: they are the one time the screen is being built.
 		starting := !startupReported || deferredStartupPending || startupGreetingPending

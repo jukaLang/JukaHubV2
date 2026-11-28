@@ -627,7 +627,7 @@ func themeUpdateActivate(config *Config, entry communityTheme) bool {
 	if kind == themeUpdateEdited {
 		if themeUpdateArmed.id != entry.ID || time.Since(themeUpdateArmed.at) > themeUpdateConfirmWindow {
 			themeUpdateArmed.id, themeUpdateArmed.at = entry.ID, time.Now()
-			ShowToast("“"+title+"” was changed on this device. Press A again to replace your edits (a copy is kept).", ToastKindWarning)
+			ShowToast("“"+title+"” was changed on this device. "+hintSentence("Press %s again to replace your edits (a copy is kept).", "A", "Replace"), ToastKindWarning)
 			PlayNavSound()
 			return true
 		}

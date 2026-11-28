@@ -684,13 +684,13 @@ func wifiForgetSelected() {
 func wifiStatusLine() (string, sdl.Color) {
 	switch {
 	case wifiPanel.startable && wifiPanel.radioOK && !wifiPanel.radioOn:
-		return "Wi-Fi is off — press A to turn it on", ColorToastWarn
+		return hintSentence("Wi-Fi is off — press %s to turn it on", "A", "Turn on"), ColorToastWarn
 	case !wifiPanel.available:
 		return wifiPanel.detail, ColorToastWarn
 	case wifiPanel.busy:
 		return wifiPanel.busyLabel, ColorTextSecondary()
 	case wifiPanel.radioOK && !wifiPanel.radioOn:
-		return "Wi-Fi is off — press A to turn it on", ColorToastWarn
+		return hintSentence("Wi-Fi is off — press %s to turn it on", "A", "Turn on"), ColorToastWarn
 	case wifiPanel.err != "":
 		return wifiPanel.err, ColorToastError
 	case wifiPanel.status.Connected:

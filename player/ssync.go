@@ -753,15 +753,30 @@ func ssyncWriteFile(dst string, r io.Reader, size int64, wantSHA string, mtime i
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".jukasync-*.tmp")
+	// Confine the staged write to the destination folder: a remote entry may
+	// have named a directory that already holds a symlink out of the tree.
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
+	defer root.Close()
+	var tmp *os.File
+	var tmpRel string
+	for tries := 0; tries < 8; tries++ {
+		tmpRel = fmt.Sprintf(".jukasync-%d.tmp", time.Now().UnixNano())
+		tmp, err = root.OpenFile(tmpRel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if !errors.Is(err, os.ErrExist) {
+			break
+		}
+	}
+	if err != nil || tmp == nil {
+		return fmt.Errorf("cannot stage a sync file: %w", err)
+	}
+	tmpName := filepath.Join(dir, tmpRel)
 	done := false
 	defer func() {
 		if !done {
-			_ = os.Remove(tmpName)
+			_ = root.Remove(tmpRel)
 		}
 	}()
 	limit := int64(saveManagerMaxFile)
@@ -790,7 +805,7 @@ func ssyncWriteFile(dst string, r io.Reader, size int64, wantSHA string, mtime i
 		t := time.Unix(mtime, 0)
 		_ = os.Chtimes(tmpName, t, t)
 	}
-	if err := os.Rename(tmpName, dst); err != nil {
+	if err := root.Rename(tmpRel, filepath.Base(dst)); err != nil {
 		return err
 	}
 	done = true

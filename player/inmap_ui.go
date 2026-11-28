@@ -125,7 +125,7 @@ var (
 
 // inmapImportHelpText is the card the import row shows.
 const inmapImportHelpText = "Someone shared a control profile? Put the .jkinput file in Downloads, " +
-	"on the card or in your home folder, then press A here to pick it. Imported profiles land in " +
+	"on the card or in your home folder, then choose Import here. Imported profiles land in " +
 	"the profiles folder, where Files can open and change them."
 
 // ── Scenes ───────────────────────────────────────────────────────────────

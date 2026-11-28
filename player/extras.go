@@ -360,6 +360,7 @@ func recordPlayed(config *Config, key string) {
 	}
 
 	saveUserConfigDebounced(userConfigFromVariables(config))
+	eventWebhookNotify(config, "game_launched", key)
 }
 
 // --- Weather (best-effort IP-geolocated 7-day forecast; non-fatal) ---

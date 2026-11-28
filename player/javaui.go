@@ -287,7 +287,7 @@ func javaUserDir() string {
 // only, so every Java's compiler reads it the same.
 const javaHelloSource = `// Hello.java - a first Java program for JukaHub.
 //
-// Run it: press A on this file in Files (it needs the JDK: Tools -> Java,
+// Run it: open this file in Files (it needs the JDK: Tools -> Java,
 // Kind: JDK), or type  java Hello.java  in the Terminal. It asks for your
 // name: type it and press Enter (Start on a pad). The Terminal sends what
 // you type to the program while it runs.
@@ -314,7 +314,7 @@ public class Hello {
 const javaReadmeText = `Java programs for JukaHub
 =========================
 
-Keep Java programs here (or anywhere) and press A on them in Files:
+Keep Java programs here (or anywhere) and open them in Files:
 
   .jar    A program in one file. It starts when its manifest names a
           Main-Class. Phone games (J2ME) go in Roms/J2ME and play from Games.

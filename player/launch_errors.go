@@ -287,6 +287,9 @@ func showLaunchDiagnosisReport(report gameDiagReport) {
 func closeLaunchFailureDialog() {
 	launchFailure = launchFailureState{}
 	PlayBackSound()
+	// A game whose emulator did not start it is asked again, in a different
+	// one (emupicker.go, emuPickRetryRun).
+	emuPickRetryRun()
 }
 
 // launchFailureCancel is Cancel on a report card: the card closes and nothing

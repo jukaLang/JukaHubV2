@@ -317,7 +317,7 @@ func hakuxInstallForGame(game libraryGame, launch func(launcher string)) bool {
 	// Asked before the folder: an install that is merging has a half-made
 	// Emus/XBOX on the card, which is neither broken nor ready.
 	if emuInstallingName() == emuXboxEntryName {
-		ShowToast("hakuX is being installed · press A on "+title+" again once it is in", ToastKindInfo)
+		ShowToast(hintSentence("hakuX is being installed · press %s on ", "A", "Play")+title+" again once it is in", ToastKindInfo)
 		return true
 	}
 	if folder, _, _ := hakuxInstalled(deviceEmuRoots); folder != "" {
@@ -335,7 +335,7 @@ func hakuxInstallForGame(game libraryGame, launch func(launcher string)) bool {
 		return true
 	}
 	if !IsOnline() {
-		ShowToast("Xbox games need hakuX · connect to the internet, then press A on "+title+" to install it", ToastKindWarning)
+		ShowToast(hintSentence("Xbox games need hakuX · connect to the internet, then press %s on ", "A", "Install")+title+" to install it", ToastKindWarning)
 		return true
 	}
 	begin := "Installing hakuX for Xbox games · " + title + " starts when it is in"
@@ -346,7 +346,7 @@ func hakuxInstallForGame(game libraryGame, launch func(launcher string)) bool {
 	pressed := time.Now()
 	hakuxStartInstallRun(hakuxInstallRun{
 		Begin: begin,
-		Busy:  "Another install is running · press A on " + title + " again when it finishes",
+		Busy:  hintSentence("Another install is running · press %s on ", "A", "Play") + title + " again when it finishes",
 		After: func(result hakuxInstallResult, err error) {
 			if err != nil {
 				return // hakuxFinish said why
@@ -372,7 +372,7 @@ func hakuxPlayAfterInstall(game libraryGame, launch func(launcher string), fromL
 		gameLib.open == fromLibrary && time.Since(pressed) < hakuxPlayAfterWithin &&
 		time.Since(finished) < hakuxPlayAfterLate
 	if !still || !regularFile(game.Path) {
-		ShowToast("hakuX "+result.Tag+" is in · press A on "+title+" in Games to play", ToastKindSuccess)
+		ShowToast("hakuX "+result.Tag+" is in · "+hintSentence("press %s on ", "A", "Play")+title+" in Games to play", ToastKindSuccess)
 		return
 	}
 	logInfo("emulators", "hakuX %s installed from a game's start; starting %s", result.Tag, filepath.Base(game.Path))

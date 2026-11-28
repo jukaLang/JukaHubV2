@@ -263,8 +263,12 @@ func encodeScreenshotPNG(pixels []byte, w, h int32, pitch int) ([]byte, error) {
 			dst[x], dst[x+1], dst[x+2], dst[x+3] = row[x+2], row[x+1], row[x], 255
 		}
 	}
+	// BestSpeed: a screenshot is written on the frame thread, and the default
+	// compression spends most of a second on a 1280x720 frame. The other
+	// screenshot writers (menushot.go, paint) already ask for it.
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	enc := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := enc.Encode(&buf, img); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

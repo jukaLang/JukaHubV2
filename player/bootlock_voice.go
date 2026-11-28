@@ -737,7 +737,7 @@ func bootLockVoiceRecord(c *Config, now uint64) {
 // bootLockVoiceAgainHint is the press that listens again here.
 func bootLockVoiceAgainHint() string {
 	if bootLockVoiceStepActive() {
-		return "press A to try again"
+		return hintSentence("press %s to try again", "A", "Try again")
 	}
 	return "press R2 to speak"
 }
@@ -1114,7 +1114,7 @@ func bootLockVoicePillLabel() string {
 	case v.on:
 		return "Listening…"
 	}
-	return "Press A to speak"
+	return hintSentence("Press %s to speak", "A", "Speak")
 }
 
 // bootLockVoiceHelp is the setup's small print during a voice step, or "".

@@ -481,7 +481,7 @@ func ytdlpVersionLabel(v string) string {
 // press.
 func ytdlpToastReason(err error) string {
 	reason := toolInstallFailureReason(err)
-	for _, tail := range []string{", then press A", " — press A to retry"} {
+	for _, tail := range []string{", then " + hintSentence("press %s", "A", "Retry"), " — " + hintSentence("press %s to retry", "A", "Retry")} {
 		reason = strings.TrimSuffix(reason, tail)
 	}
 	return reason

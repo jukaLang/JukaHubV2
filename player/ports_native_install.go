@@ -383,12 +383,20 @@ func pnWriteReader(ctx context.Context, r io.Reader, size int64, exec bool, dest
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// The zip entry name has already been sanitized by the caller; os.Root
+	// additionally stops a symlink already in the ports folder redirecting the
+	// staged write outside it (SEC-1).
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	mode := os.FileMode(0o644)
 	if exec {
 		mode = 0o755
 	}
-	tmp := filepath.Join(dir, fmt.Sprintf(".%s.jh%d.part", filepath.Base(dest), os.Getpid()))
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	tmpRel := fmt.Sprintf(".%s.jh%d.part", filepath.Base(dest), os.Getpid())
+	out, err := root.OpenFile(tmpRel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
@@ -404,11 +412,11 @@ func pnWriteReader(ctx context.Context, r io.Reader, size int64, exec bool, dest
 		err = fmt.Errorf("%s: the zip says %d bytes, it held %d", filepath.Base(dest), size, n)
 	}
 	if err != nil {
-		_ = os.Remove(tmp)
+		_ = root.Remove(tmpRel)
 		return err
 	}
-	if err := os.Rename(tmp, dest); err != nil {
-		_ = os.Remove(tmp)
+	if err := root.Rename(tmpRel, filepath.Base(dest)); err != nil {
+		_ = root.Remove(tmpRel)
 		return err
 	}
 	_ = os.Chmod(dest, mode) // FAT keeps no modes

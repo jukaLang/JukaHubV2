@@ -380,7 +380,7 @@ func tbxInstallFlow(config *Config, id string, update bool) {
 			if update {
 				ShowToast(t.Name+" is up to date", ToastKindSuccess)
 			} else {
-				ShowToast(t.Name+" installed — press A to run it", ToastKindSuccess)
+				ShowToast(t.Name+" installed — "+hintSentence("press %s to run it", "A", "Run"), ToastKindSuccess)
 			}
 		})
 	}()

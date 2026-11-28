@@ -2936,6 +2936,11 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 				showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
 				return
 			}
+			// yt-dlp's full format list needs a JavaScript runtime; the pinned
+			// QuickJS-NG goes beside the helper, best effort (MED-19).
+			if err := ytdlpJSRuntimeEnsureManaged(config); err != nil {
+				logWarn("tools", "QuickJS-NG for yt-dlp was not installed: %v", err)
+			}
 			showToast("yt-dlp installed — restart JukaHub to use it", ToastSuccess())
 			noteAwayToolInstalled("yt-dlp")
 			refreshToolHealth()

@@ -749,7 +749,7 @@ func powerActivate(config *Config) {
 			powerRemoteMu.Lock()
 			powerTools.remote = list
 			powerRemoteMu.Unlock()
-			return powerAsyncResult{text: fmt.Sprintf("Fetched %d entries from the online board.\n\nPress B to return to the board.", len(list))}
+			return powerAsyncResult{text: fmt.Sprintf("Fetched %d entries from the online board.\n\n%s", len(list), hintSentence("Press %s to return to the board.", "B", "Back"))}
 		})
 	case powerActionExportBenchmark:
 		list := append(append([]powerBenchEntry(nil), powerTools.bench...), powerRemoteEntries()...)

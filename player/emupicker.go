@@ -44,6 +44,13 @@ package main
 // or carry the launcher. The highlight starts on the emulator picked last,
 // else the recommended one, which is the one such a game ran in: Continue on a
 // game that never had the question is one press of A from where it was.
+//
+// Never the one that just failed (gameOptions.FailedEmulator). A launch that
+// does not get the game going — it never starts, or it is over within seconds
+// (gamediag.go) — is remembered, and closing its card asks the question again
+// straight away, on a different emulator (emuPickRetryRun, emuPickSkipFailed).
+// A start that does not ask, in this run or after a restart, skips it too while
+// another emulator fits, so pressing Play again cannot repeat the same failure.
 
 import (
 	"path/filepath"
@@ -236,6 +243,101 @@ func emuPickLastIndex(opts gameOptions, options []emuEntry) int {
 	return -1
 }
 
+// emuPickFailedIndex is the index in options of the emulator whose last start
+// of the game did not get going (gameOptions.FailedEmulator), or -1.
+func emuPickFailedIndex(opts gameOptions, options []emuEntry) int {
+	failed := strings.TrimSpace(opts.FailedEmulator)
+	if failed == "" {
+		return -1
+	}
+	failed = filepath.Clean(failed)
+	for i, e := range options {
+		if strings.EqualFold(filepath.Clean(e.Launch), failed) {
+			return i
+		}
+	}
+	return -1
+}
+
+// emuPickSkipFailed moves index i off the game's failed emulator when another
+// one fits: to the recommendation (the first option), else to the one beside
+// it. A game that just failed therefore opens its question, and its automatic
+// start, on a different emulator rather than the one that did not work.
+func emuPickSkipFailed(opts gameOptions, options []emuEntry, i int) int {
+	failed := emuPickFailedIndex(opts, options)
+	if failed < 0 || i != failed || len(options) < 2 {
+		return i
+	}
+	if failed == 0 {
+		return 1
+	}
+	return 0
+}
+
+// emuPickRetry is a library launch that failed before the game got going: the
+// game, and the emulator it failed in.
+var emuPickRetry struct {
+	game   libraryGame
+	failed string
+}
+
+// emuPickScheduleRetry remembers that game did not get going in rec.Launcher,
+// for the launch card that is opening for it: closing the card asks which
+// emulator to start in instead (emuPickRetryRun), and the failure is kept with
+// the game's options (gameOptions.FailedEmulator) so a start that does not ask
+// — now, or after a restart — does not pick that one again while another
+// emulator fits. A game with a single emulator, or one whose game file is not
+// there any more, schedules nothing: there is no other emulator to ask about.
+// Main thread.
+func emuPickScheduleRetry(rec *launchRecord) {
+	emuPickRetry.game, emuPickRetry.failed = libraryGame{}, ""
+	if rec == nil || rec.Kind != launchKindLibraryGame {
+		return
+	}
+	game := libraryGame{Path: strings.TrimSpace(rec.ROM), System: rec.System, Title: rec.Title}
+	launcher := strings.TrimSpace(rec.Launcher)
+	if game.Path == "" || launcher == "" || !regularFile(game.Path) {
+		return
+	}
+	updateGameOptions(game.Path, func(o gameOptions) gameOptions {
+		o.FailedEmulator = launcher
+		return o
+	})
+	options := pico8NativeLaunchers(game.System, findGameLaunchersFor(game.System, game.Path, emulatorEntries()))
+	if len(options) < 2 {
+		return
+	}
+	emuPickRetry.game = game
+	emuPickRetry.failed = launcher
+}
+
+// emuPickRetryRun asks which emulator after a failed launch's card closed: the
+// same game, the emulator that failed listed with its note and not the
+// highlight. Nothing else is up and the game has another emulator, or nothing
+// happens. Main thread (launch_errors.go, closeLaunchFailureDialog).
+func emuPickRetryRun() {
+	game, failed := emuPickRetry.game, emuPickRetry.failed
+	emuPickRetry.game, emuPickRetry.failed = libraryGame{}, ""
+	if strings.TrimSpace(game.Path) == "" || emuPickUI.open || launchFailure.open || gameScreenSuspended() {
+		return
+	}
+	options := pico8NativeLaunchers(game.System, findGameLaunchersFor(game.System, game.Path, emulatorEntries()))
+	options, recommended := emuBestOrder(game.System, options)
+	if len(options) < 2 {
+		return
+	}
+	why := "no emulator was chosen"
+	if failed != "" {
+		why = "its start in " + filepath.Base(failed) + " did not get going"
+	}
+	logInfo("library", "%s: %s; asking which emulator again", game.Label(), why)
+	emuPickSheetOpen(game, options, recommended, emuPickAskModeNow(), func(launcher string) {
+		if err := launchLibraryGame(game, launcher); err != nil {
+			gameLaunchErrorToast(game.Label(), err)
+		}
+	})
+}
+
 // chooseGameLauncher runs launch with the emulator game should start in. When
 // several fit, none is pinned and the setting asks, it asks first (the sheet
 // below) and launch runs on the answer; B runs nothing. An empty launcher
@@ -302,15 +404,29 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 		return
 	case mode == emuAskNever:
 		// No question: the one picked last, else the recommended one — what
-		// resolveGameLauncherFor reports for the game.
-		pick := options[0].Launch
+		// resolveGameLauncherFor reports for the game. Never the one whose
+		// last start of this game did not get going, while another fits.
+		idx := 0
 		if i := emuPickLastIndex(opts, options); i >= 0 {
-			pick = options[i].Launch
+			idx = i
 		}
+		pick := options[emuPickSkipFailed(opts, options, idx)].Launch
 		emuPickNoteRan(game, opts, pick)
 		launch(pick)
 		return
 	}
+	emuPickSheetOpen(game, options, recommended, mode, launch)
+}
+
+// emuPickSheetOpen puts "Which emulator?" up for game with options, and runs
+// then on the answer. mode decides what A remembers (First time per game) or
+// that only Y does (Every launch). The emulator whose last start of this game
+// did not get going is listed with a note and is not the highlight while
+// another fits, so a question asked again after a failure opens on a different
+// emulator.
+func emuPickSheetOpen(game libraryGame, options []emuEntry, recommended bool, mode string, then func(launcher string)) {
+	opts := gameOptionsFor(game.Path)
+	failed := emuPickFailedIndex(opts, options)
 	emuPickUI.open = true
 	emuPickUI.game = game
 	emuPickUI.options = options
@@ -322,14 +438,18 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 	for i, e := range options {
 		emuPickUI.details[i] = emuPickDetail(e)
 	}
+	if failed >= 0 && failed < len(emuPickUI.details) {
+		emuPickUI.details[failed] = "Did not start last time · " + emuPickUI.details[failed]
+	}
 	emuPickUI.cursor = 0
-	emuPickUI.scroll = 0
-	emuPickUI.visible = 0
-	emuPickUI.then = launch
-	emuPickUI.rowHits = emuPickUI.rowHits[:0]
 	if i := emuPickLastIndex(opts, options); i >= 0 {
 		emuPickUI.cursor = i
 	}
+	emuPickUI.cursor = emuPickSkipFailed(opts, options, emuPickUI.cursor)
+	emuPickUI.scroll = 0
+	emuPickUI.visible = 0
+	emuPickUI.then = then
+	emuPickUI.rowHits = emuPickUI.rowHits[:0]
 	logInfo("library", "asking which emulator for %s: %d choices (%s)", filepath.Base(game.Path), len(options), mode)
 	PlayActivateSound()
 }
@@ -435,6 +555,9 @@ func emuPickChoose(remember bool) {
 	emuPickClose()
 	updateGameOptions(game.Path, func(o gameOptions) gameOptions {
 		o.LastEmulator = choice.Launch
+		// The question is answered, so the picker may default to this one
+		// again; a failure in it is remembered anew (emuPickScheduleRetry).
+		o.FailedEmulator = ""
 		if remember {
 			o.Emulator = choice.Launch
 		}

@@ -243,7 +243,7 @@ func portCatalogSummary() string {
 		return "Reading PortMaster's live catalogue"
 	}
 	if portsPanel.catalogErr != "" {
-		return "Connect to Wi-Fi and press A to retry"
+		return hintSentence("Connect to Wi-Fi and press %s to retry", "A", "Retry")
 	}
 	filter := "All ports"
 	if portsPanel.mayRun {

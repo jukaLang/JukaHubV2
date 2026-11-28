@@ -383,7 +383,7 @@ func componentVersionsText(config *Config, full bool) string {
 		sb.WriteString(line + "\n")
 	}
 	if !full {
-		sb.WriteString("\nPress A to copy the full 64-character hashes.")
+		sb.WriteString("\n" + hintSentence("Press %s to copy the full 64-character hashes.", "A", "Copy"))
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }

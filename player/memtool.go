@@ -254,10 +254,10 @@ func memoryMenuValue() string {
 // memRows builds the actions list for the live session.
 func memRows() []memRow {
 	targetValue := "No target"
-	targetDetail := "Press A to pick a running process"
+	targetDetail := hintSentence("Press %s to pick a running process", "A", "Pick")
 	if memPanel.pid > 0 {
 		targetValue = fmt.Sprintf("%s (PID %d)", memPanel.pidName, memPanel.pid)
-		targetDetail = "Press A to pick another process"
+		targetDetail = hintSentence("Press %s to pick another process", "A", "Pick")
 	}
 	if memPanel.openErr != "" {
 		targetDetail = firstLine(memPanel.openErr)
@@ -288,7 +288,7 @@ func memRows() []memRow {
 func memValueLabel() string {
 	raw := memPanel.valueText
 	if raw == "" {
-		return "Not set — press A"
+		return hintSentence("Not set — press %s", "A", "Set")
 	}
 	v, ok := ramParseValue(raw)
 	if !ok {
@@ -387,7 +387,7 @@ func memNarrowScan() {
 		ShowToast("Nothing left — the value did not change as expected", ToastKindWarning)
 	case after == 1:
 		PlaySuccessSound()
-		ShowToast("One address left — press A on Results to edit it", ToastKindSuccess)
+		ShowToast(hintSentence("One address left — press %s on Results to edit it", "A", "Edit"), ToastKindSuccess)
 	default:
 		ShowToast(fmt.Sprintf("%d of %d address(es) kept", after, before), ToastKindInfo)
 	}
@@ -413,7 +413,7 @@ func memWriteSelected() {
 		memPanel.confirmAddr = cand.Addr
 		memPanel.confirmAt = time.Now()
 		PlayNavSound()
-		ShowToast(fmt.Sprintf("Press A again to write %d to %s", value, ramFormatAddr(cand.Addr)), ToastKindWarning)
+		ShowToast(fmt.Sprintf(hintSentence("Press %s again to write %d to %s", "A", "Write"), value, ramFormatAddr(cand.Addr)), ToastKindWarning)
 		return
 	}
 	memPanel.confirmAddr = 0
@@ -1021,7 +1021,7 @@ func renderMemResultBody(renderer *sdl.Renderer, config *Config, font *ttf.Font,
 		}
 		renderText(renderer, config, font, live, textColor, colValue, rowY+2)
 		if focused && memPanel.confirmAddr == cand.Addr {
-			renderText(renderer, config, font, "press A to confirm", ToastWarnInk(), colNote, rowY+2)
+			renderText(renderer, config, font, hintSentence("press %s to confirm", "A", "Confirm"), ToastWarnInk(), colNote, rowY+2)
 		}
 		rowY += lineH
 	}

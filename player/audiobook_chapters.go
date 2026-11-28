@@ -315,12 +315,20 @@ var audioChapterRevision atomic.Uint64
 // book, if any.
 func musicChapters() []audioChapter {
 	music.mu.Lock()
-	tracks := append([]musicTrack(nil), music.tracks...)
-	music.mu.Unlock()
-	if len(tracks) != 1 {
+	if music.current < 0 || music.current >= len(music.tracks) {
+		music.mu.Unlock()
 		return nil
 	}
-	return audioChaptersFor(tracks[0].Path)
+	track := music.tracks[music.current]
+	tracks := len(music.tracks)
+	music.mu.Unlock()
+	// A book is one file; a podcast episode is one track in a show queue but
+	// its chapters still belong in the list. An ordinary album track does not
+	// get a chapter list.
+	if tracks != 1 && !track.Podcast {
+		return nil
+	}
+	return audioChaptersFor(track.Path)
 }
 
 // musicPlayChapter starts chapter i of the current book file.
@@ -330,15 +338,23 @@ func musicPlayChapter(i int) {
 		return
 	}
 	music.mu.Lock()
-	needPlay := music.current != 0 || !music.playing
+	cur := music.current
+	if cur < 0 || cur >= len(music.tracks) {
+		music.mu.Unlock()
+		return
+	}
+	needPlay := !music.playing
+	singleBook := len(music.tracks) == 1 && !music.tracks[cur].Podcast
 	music.mu.Unlock()
 	if needPlay {
-		musicPlayTrack(0)
+		musicPlayTrack(cur)
 	}
 	musicSeek(chapters[i].Start)
-	music.mu.Lock()
-	music.cursor = i
-	music.mu.Unlock()
+	if singleBook {
+		music.mu.Lock()
+		music.cursor = i
+		music.mu.Unlock()
+	}
 	showToast(fmt.Sprintf("Chapter %d of %d — %s", i+1, len(chapters), chapters[i].Title), ToastInfo())
 }
 

@@ -103,7 +103,7 @@ func windowsRuntimeSetupRow(facts wineRuntimeFacts) windowsSetupRow {
 			row.Detail = facts.Wine
 		}
 		if !facts.PrefixReady && facts.PrefixProblem == "" {
-			row.Detail = strings.TrimPrefix(row.Detail+" · press A to prepare Windows now (a few minutes)", " · ")
+			row.Detail = strings.TrimPrefix(row.Detail+hintSentence(" · press %s to prepare Windows now (a few minutes)", "A", "Prepare"), " · ")
 		}
 	case winePackSupported():
 		row.Detail = "Downloads about 130 MB (Box64, Wine 10.0, WestonPack); needs about 700 MB free."

@@ -73,12 +73,19 @@ type gameOptions struct {
 	// last, highlighted the next time the picker asks (emupicker.go).
 	Emulator     string `json:"emulator,omitempty"`
 	LastEmulator string `json:"last_emulator,omitempty"`
+
+	// FailedEmulator is the emulator whose last start of this game did not
+	// get going. The picker never defaults to it while another one fits, and
+	// a failure asks again instead (emupicker.go): starting a game over and
+	// over in the emulator that failed it is what this makes impossible.
+	FailedEmulator string `json:"failed_emulator,omitempty"`
 }
 
 func (o gameOptions) empty() bool {
 	return o.MaxFreqKHz <= 0 && strings.TrimSpace(o.Args) == "" &&
 		strings.TrimSpace(o.Env) == "" &&
-		o.CPUProfile == "" && o.VideoFilter == "" && o.Emulator == "" && o.LastEmulator == ""
+		o.CPUProfile == "" && o.VideoFilter == "" && o.Emulator == "" && o.LastEmulator == "" &&
+		o.FailedEmulator == ""
 }
 
 // ── CPU profile per game ─────────────────────────────────────────────────
@@ -469,6 +476,7 @@ func normaliseGameOptions(o gameOptions) gameOptions {
 	o.VideoFilter = normaliseGameVideoFilter(o.VideoFilter)
 	o.Emulator = strings.TrimSpace(o.Emulator)
 	o.LastEmulator = strings.TrimSpace(o.LastEmulator)
+	o.FailedEmulator = strings.TrimSpace(o.FailedEmulator)
 	return o
 }
 

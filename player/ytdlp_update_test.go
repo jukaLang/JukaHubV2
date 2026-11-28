@@ -262,7 +262,7 @@ func TestPrependPathEnv(t *testing.T) {
 // android_vr formats are refused by the CDN since 2026-08-17: the first
 // attempt must not ask for that client, and android must be asked first.
 func TestStreamAttemptsOrder(t *testing.T) {
-	attempts := streamAttempts(720)
+	attempts := streamAttempts(720, false)
 	if len(attempts) == 0 {
 		t.Fatal("no attempts")
 	}

@@ -889,7 +889,7 @@ func netToolsResultSheet(s *toolsHubSheet, spec netToolsSpec, res netToolsResult
 	if res.running {
 		s.busy = netToolsBusyText(spec.id, target)
 	}
-	s.empty = "Press A to run " + spec.label
+	s.empty = hintSentence("Press %s to run ", "A", "Run") + spec.label
 	run := "Run again"
 	if res.at.IsZero() && !res.running {
 		run = "Run"

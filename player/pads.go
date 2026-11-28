@@ -943,7 +943,7 @@ func padsPadRows(i int) []padsRow {
 			padsRequest(clip.Sample, nil)
 		}),
 		padsAction("Clear pad", func() {
-			if !padsArm("clear-pad", "Press A again to clear "+padsPadLabel(i)) {
+			if !padsArm("clear-pad", hintSentence("Press %s again to clear ", "A", "Clear")+padsPadLabel(i)) {
 				return
 			}
 			padsEdit(func(p *padsProject, e *padsEngine) {
@@ -1037,13 +1037,13 @@ func padsSongSettingRows() []padsRow {
 			ShowToast(fmt.Sprintf("Copied to pattern %d", to+1), ToastKindSuccess)
 		}),
 		padsAction("Clear pattern", func() {
-			if !padsArm("clear-pattern", "Press A again to clear this pattern") {
+			if !padsArm("clear-pattern", hintSentence("Press %s again to clear this pattern", "A", "Clear")) {
 				return
 			}
 			padsEdit(func(p *padsProject, e *padsEngine) { p.Patterns[p.Current].Hits = nil })
 		}),
 		padsAction("Random beat", func() {
-			if !padsArm("random", "Press A again to replace this pattern with a random beat") {
+			if !padsArm("random", hintSentence("Press %s again to replace this pattern with a random beat", "A", "Replace")) {
 				return
 			}
 			bank := padsUI.bank
@@ -1063,7 +1063,7 @@ func padsSongSettingRows() []padsRow {
 			}
 		}),
 		padsAction("Clear song", func() {
-			if !padsArm("clear-song", "Press A again to clear the song") {
+			if !padsArm("clear-song", hintSentence("Press %s again to clear the song", "A", "Clear")) {
 				return
 			}
 			padsEdit(func(p *padsProject, e *padsEngine) { p.Song = nil })
@@ -1150,7 +1150,7 @@ func padsMixRows() []padsRow {
 		padsAction("Export to WAV", padsExportWAV),
 		padsAction("Starter kit on this bank", func() {
 			bank := padsUI.bank
-			if !padsArm("kit", "Press A again to put the starter kit on bank "+padsBankName(bank)) {
+			if !padsArm("kit", hintSentence("Press %s again to put the starter kit on bank ", "A", "Load")+padsBankName(bank)) {
 				return
 			}
 			padsEdit(func(p *padsProject, e *padsEngine) {
@@ -1162,7 +1162,7 @@ func padsMixRows() []padsRow {
 		}),
 		padsAction("Clear this bank", func() {
 			bank := padsUI.bank
-			if !padsArm("clear-bank", "Press A again to clear bank "+padsBankName(bank)) {
+			if !padsArm("clear-bank", hintSentence("Press %s again to clear bank ", "A", "Clear")+padsBankName(bank)) {
 				return
 			}
 			padsEdit(func(p *padsProject, e *padsEngine) {
@@ -1172,7 +1172,7 @@ func padsMixRows() []padsRow {
 			})
 		}),
 		padsAction("New project", func() {
-			if !padsArm("new", "Press A again to start over with the starter project") {
+			if !padsArm("new", hintSentence("Press %s again to start over with the starter project", "A", "Start over")) {
 				return
 			}
 			padsEdit(func(p *padsProject, e *padsEngine) {

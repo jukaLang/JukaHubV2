@@ -430,9 +430,9 @@ func tailscaledActivate(config *Config, id string) {
 	case id == "logout" || id == "remove":
 		if tailscaledScreen.confirm != id {
 			tailscaledScreen.confirm = id
-			msg := "Press A again to log out of Tailscale"
+			msg := hintSentence("Press %s again to log out of Tailscale", "A", "Log out")
 			if id == "remove" {
-				msg = "Press A again to remove Tailscale"
+				msg = hintSentence("Press %s again to remove Tailscale", "A", "Remove")
 			}
 			ShowToast(msg, ToastKindWarning)
 			return
@@ -472,7 +472,7 @@ func tailscaledCheckNow() {
 		case err != nil:
 			ShowToast("Tailscale: "+firstLine(err.Error()), ToastKindError)
 		case newer:
-			ShowToast("Tailscale "+ver+" is out — press A to update", ToastKindInfo)
+			ShowToast("Tailscale "+ver+" is out — "+hintSentence("press %s to update", "A", "Update"), ToastKindInfo)
 		default:
 			ShowToast("Tailscale "+ver+" is the newest version", ToastKindSuccess)
 		}

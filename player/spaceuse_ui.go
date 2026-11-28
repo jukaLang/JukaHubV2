@@ -479,9 +479,9 @@ func spaceUseRender(renderer *sdl.Renderer, config *Config) {
 		}
 	case !running:
 		y += 6
-		hint := "Press A on the drive to see which folders and files fill it."
+		hint := hintSentence("Press %s on the drive to see which folders and files fill it.", "A", "Open")
 		if res != nil && res.err != "" && filepath.Clean(res.volume.Path) == filepath.Clean(vol.Path) {
-			hint = res.err + " — press A on the drive to try again."
+			hint = res.err + " — " + hintSentence("press %s on the drive to try again.", "A", "Retry")
 		}
 		tbxDrawEmpty(renderer, config, sdl.Rect{X: x, Y: top + y, W: w, H: 180}, "chart", "Not scanned yet", hint)
 		y += 180

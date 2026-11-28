@@ -96,7 +96,7 @@ var onboardingSteps = []onboardingStep{
 	{
 		title: "Get set up",
 		body:  "These links unlock the rest of JukaHub: achievements, video, Remote Play and your phone. Everything here is optional, and the tour comes back when you close a panel.",
-		hint:  "Choose a row and press A to open it.",
+		hint:  hintSentence("Choose a row and press %s to open it.", "A", "Open"),
 		kind:  "setup",
 	},
 	{

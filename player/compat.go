@@ -1448,6 +1448,11 @@ func coreLoadProblemFileWith(source, target string, withRuntime bool) string {
 		return ""
 	}
 	defer f.Close()
+	// A file that is not the whole program comes first: every check below
+	// needs to read the binary (elfcompat.go, elfDamageProblem).
+	if problem := elfDamageProblem(f); problem != "" {
+		return problem
+	}
 	env := coreLoadEnvWith(target, withRuntime)
 	if problem := elfLoadProblemFrom(f, env); problem != "" || env.archOnly {
 		return problem
@@ -1472,6 +1477,9 @@ func coreLoadProblemFileWith(source, target string, withRuntime bool) string {
 func coreLoadProblemData(data []byte, target string) string {
 	if runtime.GOOS != "linux" || len(data) > elfCheckMaxSize {
 		return ""
+	}
+	if problem := elfDamageProblem(bytes.NewReader(data)); problem != "" {
+		return problem
 	}
 	return elfLoadProblemFrom(bytes.NewReader(data), coreLoadEnv(target))
 }

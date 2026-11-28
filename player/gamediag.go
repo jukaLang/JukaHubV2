@@ -297,6 +297,12 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 		// What the launch script itself said: "ra64.trimui: not found".
 		d.addLauncherOutput(&report)
 	}
+	// A fatal signal JukaHub did not send: the emulator's own program ended,
+	// and that is a finding of its own — a launch like that used to reach the
+	// card with nothing to say (gamediag_crash.go: JH-N8NGPX, JH-RW63TU).
+	if killed {
+		d.gameDiagCrashAdd(&report, sig)
+	}
 	// Only a finding that stops a game counts on its own: a "may be needed"
 	// (Flycast's built-in BIOS, an unusual file type) is true of games that
 	// run fine, and a player who quits one within seconds must not get a
@@ -472,6 +478,9 @@ func gameDiagShowPending() {
 	// A launch that failed offers its bug report (launchreport.go), and a port
 	// that ran under BusyBox offers "Try it directly" (launch_errors.go).
 	showLaunchDiagnosisReport(*report)
+	// A library game that did not get going: closing this card asks which
+	// emulator to start it in instead, never the one that failed (emupicker.go).
+	emuPickScheduleRetry(report.Launch)
 }
 
 // gameDiagRunManual is the options sheet's "Check why it won't start": the
@@ -689,10 +698,11 @@ func gameDiagCoreOutcome(report gameDiagReport, failed bool, code, sig int) (cor
 }
 
 // gameDiagCoreIssueTitle reports a finding about the core build itself (not
-// its absence, not the game file).
+// its absence, not the game file). The core's own crash is one (gamediag_crash.go):
+// a build on probation that ends on a signal must still be put back.
 func gameDiagCoreIssueTitle(title string) bool {
 	lower := strings.ToLower(title)
-	for _, mark := range []string{"cannot load on this device", "could not open the core", "needs desktop opengl"} {
+	for _, mark := range []string{"cannot load on this device", "could not open the core", "needs desktop opengl", " crashed (signal "} {
 		if strings.Contains(lower, mark) {
 			return true
 		}
@@ -807,6 +817,22 @@ func gameDiagGPULogIssue(lines []string) (launchIssue, bool) {
 }
 
 func gameDiagCoreLoadIssue(core, path, problem string) launchIssue {
+	// A core file that is not the whole program is certain, and it is not a
+	// build made for another device: it is a copy that stopped halfway
+	// (JH-YV9AEC, swanstation). The title keeps its "cannot load on this
+	// device" wording, which is what corefix.go's after-game repair looks
+	// for: JukaHub fetches a build for this device as soon as the game is
+	// started again.
+	if strings.Contains(problem, "its file is damaged") {
+		return launchIssue{
+			Level: int(gameDiagSure),
+			Title: "The " + coreConfigDisplayName(core) + " core cannot load on this device",
+			Where: path,
+			Detail: problem + ". The file on the card is not the whole program, so RetroArch stops as soon as it opens it — " +
+				"every game this core plays, not only this one. Starting the game again lets JukaHub put a build for this device in " +
+				"its place; the Emulators page installs one too (L1 to update, or Get more cores).",
+		}
+	}
 	return launchIssue{
 		Level:  int(gameDiagLikely),
 		Title:  "The " + coreConfigDisplayName(core) + " core cannot load on this device",

@@ -516,7 +516,7 @@ func upchBuildView(running bool, runTag string, done, total int64, lastErr, from
 		case lastErr != "":
 			v.Line = "JukaHub " + label + " · download failed: " + truncateRunesSuffix(lastErr, 44, "…")
 		case !upchAutoOn.Load():
-			v.Line = "JukaHub " + label + " is available · press A to download it for later"
+			v.Line = "JukaHub " + label + " is available · " + hintSentence("press %s to download it for later", "A", "Download")
 		default:
 			v.Line = "JukaHub " + label + " is available · downloads while charging or idle"
 		}

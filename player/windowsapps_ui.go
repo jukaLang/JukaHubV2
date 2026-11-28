@@ -10,7 +10,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -259,7 +258,7 @@ func windowsAppsPanelProvision(entry windowsAppEntry) {
 // second one before installing that experiment.
 func windowsAppsPanelInstallDXVK() {
 	if dxvk, _ := resolveDXVK(); dxvk == "" && dxvkLegacyOnly() && !windowsDXVKConfirmed() {
-		ShowToast("DXVK "+windowsDXVKLegacyVersion+" is an experiment on this Vulkan · press A again to install it", ToastKindInfo)
+		ShowToast("DXVK "+windowsDXVKLegacyVersion+" is an experiment on this Vulkan · "+hintSentence("press %s again to install it", "A", "Install"), ToastKindInfo)
 		return
 	}
 	if !beginWindowsRuntimeInstall("dxvk", "checking for a Vulkan loader") {
@@ -467,11 +466,11 @@ func windowsAppsOfferSetup(entry windowsAppEntry, runtime windowsRuntimeStatus) 
 	pending := entry
 	winAppsPanel.help = true
 	winAppsPanel.pending = &pending
-	winAppsPanel.notice = fmt.Sprintf("To run %s, install %s first. Press A to download and install it; %s starts when it is ready.",
-		entry.Title, windowsPlanLabel(plan), entry.Title)
+	winAppsPanel.notice = "To run " + entry.Title + ", install " + windowsPlanLabel(plan) + " first. " +
+		hintSentence("Press %s to download and install it; ", "A", "Install") + entry.Title + " starts when it is ready."
 	setWindowsSetupCursor(windowsRuntimeStepRow(plan[0]))
 	PlayActivateSound()
-	ShowToast("Runtime needed — press A to install", ToastKindInfo)
+	ShowToast(hintSentence("Runtime needed — press %s to install", "A", "Install"), ToastKindInfo)
 	return true
 }
 

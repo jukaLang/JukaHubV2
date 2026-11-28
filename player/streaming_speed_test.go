@@ -62,7 +62,7 @@ func TestResolveWithRunnerUsesOneCallForSites(t *testing.T) {
 	url := "https://www.redgifs.com/watch/AbCdEf"
 	calls := 0
 	var seen []string
-	direct, err := resolveWithRunner(context.Background(), url, 720, nil,
+	direct, err := resolveWithRunner(context.Background(), url, 720, nil, false,
 		func(_ context.Context, args []string) (string, error) {
 			calls++
 			seen = append(seen, strings.Join(args, " "))
@@ -82,7 +82,7 @@ func TestResolveWithRunnerUsesOneCallForSites(t *testing.T) {
 func TestResolveWithRunnerKeepsYouTubeClients(t *testing.T) {
 	url := "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 	calls := 0
-	_, err := resolveWithRunner(context.Background(), url, 720, nil,
+	_, err := resolveWithRunner(context.Background(), url, 720, nil, false,
 		func(_ context.Context, _ []string) (string, error) {
 			calls++
 			return "", errors.New("temporary failure")

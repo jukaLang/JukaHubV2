@@ -226,7 +226,7 @@ func processPanelActivate() {
 		processPanel.confirmPID = row.PID
 		processPanel.confirmAt = time.Now()
 		PlayNavSound()
-		ShowToast(fmt.Sprintf("Press A again to kill %s (PID %d)", row.Name, row.PID), ToastKindWarning)
+		ShowToast(fmt.Sprintf(hintSentence("Press %s again to kill %s (PID %d)", "A", "Kill"), row.Name, row.PID), ToastKindWarning)
 		return
 	}
 	processPanel.confirmPID = 0

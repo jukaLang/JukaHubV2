@@ -600,6 +600,23 @@ session without the walk: F12 or Start → Screenshot saves the next frame as a
 PNG into `--screenshot-dir` (default: the `screenshots` folder beside the app).
 `JUKAHUB_SCREENSHOT_MODE=1` turns the mode on from `launch.sh` on the handheld.
 
+### Scene dump
+
+`JukaHub --scene-dump ../scenes` writes every configured scene at both canvases
+and quits: `../scenes/1280x720/<scene>.png` and
+`../scenes/960x720/<scene>.png`. It is a walk of the real pages, not the
+README tour, so it is the quick way to see what a layout change did to all of
+them. The Browser is included because `main.go` injects its scene before the
+window opens; the Exit scene is skipped because opening it quits. Sheets, the
+Start menu and Quick Settings are drawn over a scene rather than being scenes,
+so they are not in the dump. On a machine without a display, run it with
+`SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy`; the parent starts one child per
+size so each layout is built at the canvas it is captured at, and the whole
+walk takes well under a minute per size. Network pages show whatever state they
+can reach, so a dump is not a substitute for the README tour's settled feeds.
+
+### Screenshot details
+
 `screenshotmode.go` swaps out what identifies the person taking the picture:
 the hints name the pad's buttons whatever is plugged in, every clock reads 9:41
 on Saturday 14 November and the dock's next alarm 10:45, no weather is drawn,

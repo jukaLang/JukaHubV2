@@ -332,6 +332,30 @@ func elfLoadProblemFrom(r io.ReaderAt, env elfLoadEnv) string {
 	return elfJoinProblems(problems)
 }
 
+// elfDamageProblem reports a file whose first bytes say ELF but which this build
+// cannot read as a whole: debug/elf refuses it, so every check here that asks a
+// binary about itself — its machine, the libraries it needs, the GPU library it
+// links — has to skip it. That is not "cannot tell". A core file that is not the
+// whole program is what crashes RetroArch the moment it opens it: a Smart Pro S
+// ran Crash Bandicoot on a swanstation build of which the launch report said
+// "a damaged program (invalid ELF section name string table type 'SHT_NULL' in
+// record at byte 0x4b1be8)", because the load check stood aside for a file it
+// could not parse and every start ended in SIGSEGV (JH-YV9AEC). "" when the file
+// is not an ELF (a Windows DLL, a script, a test fixture) or reads cleanly.
+func elfDamageProblem(r io.ReaderAt) string {
+	var magic [4]byte
+	if _, err := r.ReadAt(magic[:], 0); err != nil {
+		return ""
+	}
+	if !bytes.Equal(magic[:], []byte("\x7fELF")) {
+		return ""
+	}
+	if _, err := elf.NewFile(r); err != nil {
+		return "its file is damaged (" + firstLine(err.Error()) + ")"
+	}
+	return ""
+}
+
 // elfRunPaths reads the binary's DT_RUNPATH and DT_RPATH folders, with $ORIGIN
 // resolved against origin (entries that need it are dropped when origin is "").
 func elfRunPaths(f *elf.File, origin string) []string {

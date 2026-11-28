@@ -47,6 +47,11 @@ type musicTrack struct {
 	Path     string
 	Name     string
 	Duration float64 // seconds, 0 until ffprobe answers
+	// Podcast marks an episode queued from the Podcasts screen, so its
+	// external chapters can be shown in the player and its saved copy can be
+	// cleaned up after it plays to the end.
+	Podcast    bool
+	PodcastURL string
 }
 
 type musicState struct {
@@ -68,7 +73,14 @@ type musicState struct {
 	order      []int // shuffle permutation, rebuilt whenever the list changes
 	orderPos   int
 	queue      []string // absolute paths waiting to play next
-	queueLen   int      // queue length cached for the status line
+	// MED-7 crossfade: the pre-decoded head of the next track, and the
+	// offset a decode that mixed its tail tells the next one to start at.
+	crossfade        *musicCrossfadeState
+	crossfadeNext    int
+	crossfadeOffset  float64
+	crossfadeGen     int
+	crossfadeLoading int // generation whose next head is being decoded
+	queueLen         int // queue length cached for the status line
 
 	// Long-form extras (audiobooks, podcasts).
 	speed          float64   // listening speed, 0.75..2 (see audioSpeedSteps)
@@ -470,6 +482,16 @@ func musicPlayTrackNext(index int) {
 	musicPlayTrackAt(index, true)
 }
 
+// musicPlayTrackNextAt is the same step for a crossfaded join: the head of the
+// next track was already heard, so its decoder starts at offset.
+func musicPlayTrackNextAt(index int, offset float64) {
+	if musicPlayTrackHook != nil {
+		musicPlayTrackHook(index)
+		return
+	}
+	musicPlayTrackAtOffset(index, true, offset)
+}
+
 func musicPlayTrackNow(index int) { musicPlayTrackAt(index, false) }
 
 // musicPlayTrackAt starts track index. gapless is the step after a track
@@ -478,6 +500,13 @@ func musicPlayTrackNow(index int) { musicPlayTrackAt(index, false) }
 // within the second the queue holds, so the two meet without a gap), and no
 // UI click sounds between them.
 func musicPlayTrackAt(index int, gapless bool) {
+	musicPlayTrackAtOffset(index, gapless, 0)
+}
+
+// musicPlayTrackAtOffset is musicPlayTrackAt for an overlap: the first offset
+// media seconds were already heard in the crossfade, so the next decoder starts
+// there instead of at the saved place or the top.
+func musicPlayTrackAtOffset(index int, gapless bool, offset float64) {
 	music.mu.Lock()
 	if index < 0 || index >= len(music.tracks) {
 		music.mu.Unlock()
@@ -522,6 +551,13 @@ func musicPlayTrackAt(index int, gapless bool) {
 			resume = saved
 		}
 	}
+	if offset > musicCrossfadeSilent {
+		// The crossfade already played this much of the track. Do not let a
+		// remembered place pull it backwards over the join.
+		resume = offset
+	}
+	music.crossfade = nil
+	music.crossfadeNext, music.crossfadeOffset, music.crossfadeGen = 0, 0, 0
 	music.position = resume
 	music.lyrics = loadLyricsFor(track.Path)
 	music.lastSave = time.Now()
@@ -539,6 +575,8 @@ func musicPlayTrackAt(index int, gapless bool) {
 
 	if gapless && resume <= 0.05 {
 		musicStartDecodeGapless(track.Path)
+	} else if gapless {
+		musicStartDecodeKeep(track.Path, resume, true)
 	} else {
 		musicStartDecode(track.Path, resume)
 		PlayActivateSound()
@@ -597,11 +635,18 @@ func musicProbeDuration(path string) float64 {
 		return 0
 	}
 	music.mu.Lock()
-	defer music.mu.Unlock()
 	if music.current >= 0 && music.current < len(music.tracks) &&
 		sameAudioPath(music.tracks[music.current].Path, path) {
 		music.tracks[music.current].Duration = dur
 		music.duration = dur
+		gen, rate, speed := music.gen, music.rate, music.speed
+		music.mu.Unlock()
+		// A track can start before its length is known. Now that ffprobe has
+		// one, the crossfade preloader can decide whether the next head fits.
+		// Without the decoder's rate the head would not match its samples.
+		if rate > 0 {
+			musicCrossfadeStartPreload(path, gen, rate, speed)
+		}
 		return dur
 	}
 	for i := range music.tracks {
@@ -609,6 +654,7 @@ func musicProbeDuration(path string) float64 {
 			music.tracks[i].Duration = dur
 		}
 	}
+	music.mu.Unlock()
 	return dur
 }
 
@@ -678,6 +724,11 @@ func musicStartDecodeKeep(path string, startSec float64, keep bool) {
 	music.pcmLead = lead
 	music.pcmStart = startSec
 	music.position = startSec
+	// A new decoder generation invalidates any head preloaded for the old
+	// one; the new decode starts its own preload when it knows its rate.
+	music.crossfade = nil
+	music.crossfadeNext, music.crossfadeOffset, music.crossfadeGen = 0, 0, 0
+	music.crossfadeLoading = 0
 	prev := music.proc
 	music.proc = nil
 	music.mu.Unlock()
@@ -737,6 +788,12 @@ func musicDecode(path string, startSec float64, gen int) {
 	// Tape Mode's speed reads the track faster or slower too (musicfx.go): the
 	// position counts media seconds, so it is part of the rate.
 	mediaRate := speed * musicFXTapeFactor()
+	// MED-7: ReplayGain is a normal-path feature. The bit-perfect branch has
+	// already returned, so its samples stay untouched by definition.
+	replayGain := 1.0
+	if musicReplayGainAvailable(cfg) && !isHTTPMediaURL(path) && !chiptuneHandles(path) {
+		replayGain = musicReplayGainFor(path)
+	}
 	// An https stream (radio, podcast) reaches the firmware's TLS-less ffmpeg
 	// through the loopback relay (ffmpegtls.go).
 	args := musicFFmpegArgs(ffmpegReadableInput(ffmpegPath, path), startSec, speed, rate)
@@ -797,7 +854,14 @@ func musicDecode(path string, startSec float64, gen int) {
 	// immediately; allocating 32KB per read was pure GC pressure while music
 	// plays for hours.
 	pcm := make([]byte, len(buf))
+	mixpcm := make([]byte, 0, len(buf))
 	var savePos, saveDur float64
+	// Crossfade state is local to this decode. musicCrossfadeFor returns the
+	// pre-decoded head once the next track's first N seconds are ready; the
+	// tests exercise the mixer itself with synthetic buffers.
+	var xfade *musicCrossfadeState
+	xfadePos, xfadeMixed, xfadePre := 0, 0, 0
+	musicCrossfadeStartPreload(path, gen, rate, speed)
 	stream.start()
 loop:
 	for {
@@ -821,7 +885,56 @@ loop:
 				time.Sleep(20 * time.Millisecond)
 			}
 			copy(pcm[:n], buf[:n])
-			QueueVideoAudio(fx.processS16(pcm[:n]), vol)
+			emit := func(data []byte) {
+				if len(data) == 0 {
+					return
+				}
+				if replayGain != 1 {
+					musicReplayGainApply(data, replayGain)
+				}
+				QueueVideoAudio(fx.processS16(data), vol)
+			}
+			curFrames := n / 4
+			if xfade == nil {
+				music.mu.Lock()
+				if gen == music.gen && music.crossfade != nil && music.duration > 0 {
+					xf := music.crossfade
+					left := int64(math.Round((music.duration - music.position) * float64(rate) / mediaRate))
+					// Start within the chunk that reaches the last N seconds, so
+					// the current track still has the whole head left to mix.
+					if left >= int64(xf.frames) && left <= int64(xf.frames+curFrames) {
+						xfade = xf
+						xfadePre = int(left) - xf.frames
+					}
+				}
+				music.mu.Unlock()
+			}
+			if xfade != nil {
+				pre := xfadePre
+				xfadePre = 0
+				if pre > curFrames {
+					pre = curFrames
+				}
+				emit(pcm[:pre*4])
+				next := xfade.head[xfadePos:]
+				cur := pcm[pre*4 : n]
+				take := len(cur)
+				if take > len(next) {
+					take = len(next)
+				}
+				if take > 0 {
+					mixpcm = musicCrossfadeMixTo(mixpcm[:0], cur[:take], next[:take], xfadePos/4, xfade.frames)
+					emit(mixpcm)
+					xfadePos += take
+					xfadeMixed += take
+				}
+				// Once the head is used up the current track is at the end of
+				// the overlap. Any bytes after it are the decoder's tail beyond
+				// the mixed window; they are dropped rather than played as a
+				// second, un-faded tail. The next decoder starts at xfadeMixed.
+			} else {
+				emit(pcm[:n])
+			}
 
 			music.mu.Lock()
 			if gen == music.gen {
@@ -855,6 +968,15 @@ loop:
 	}
 	stream.stop()
 	waitErr := cmd.Wait()
+	if xfadeMixed > 0 && xfade != nil {
+		music.mu.Lock()
+		if gen == music.gen && music.playing {
+			music.crossfadeNext = xfade.next
+			music.crossfadeOffset = musicMediaElapsed(0, int64(xfadeMixed), rate, mediaRate)
+			music.crossfadeGen = gen
+		}
+		music.mu.Unlock()
+	}
 	musicDecodeEnded(waitErr, path, gen, stream.stalled(gen))
 }
 
@@ -875,8 +997,16 @@ func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 	radio := saverRadioListed(path)
 	music.mu.Lock()
 	finished := gen == music.gen && music.playing
+	// A decode that mixed its tail left the next track and the offset its
+	// pre-decoded head reached. Consume it only for this generation.
+	xfNext, xfOffset, xfGen := -1, 0.0, -1
+	if gen == music.gen {
+		xfNext, xfOffset, xfGen = music.crossfadeNext, music.crossfadeOffset, music.crossfadeGen
+		music.crossfadeNext, music.crossfadeOffset, music.crossfadeGen = 0, 0, 0
+	}
 	reachedEnd, cutShort, silent := false, false, false
 	stoppedAt, stoppedDur := music.position, music.duration
+	podcastURL := ""
 	if gen == music.gen {
 		music.proc = nil
 		music.playing = false
@@ -909,6 +1039,12 @@ func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 			// A local chapter with no probed duration still has a real end
 			// when ffmpeg reaches EOF cleanly.
 			reachedEnd = true
+		}
+		if music.current >= 0 && music.current < len(music.tracks) {
+			track := music.tracks[music.current]
+			if track.Podcast && track.Path == path {
+				podcastURL = track.PodcastURL
+			}
 		}
 	}
 	// Where playback goes next: repeat-one restarts the same track, a queued
@@ -958,9 +1094,18 @@ func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 		if bookKey != "" && lastBookTrack && !advance {
 			audioBookRemember(bookKey, path, true)
 		}
+		// An episode that was downloaded for this listen leaves no stale
+		// file or finished Downloads row behind.
+		if podcastURL != "" {
+			podcastEpisodeCleanup(podcastURL, path)
+		}
 	}
 	if advance {
-		if (waitErr == nil && !silent) || radio {
+		if xfOffset > musicCrossfadeSilent && xfGen == gen && xfNext == nextIdx {
+			// The overlap already played the head of this track; continue from
+			// exactly where the mixed samples stopped.
+			musicPlayTrackNextAt(nextIdx, xfOffset)
+		} else if (waitErr == nil && !silent) || radio {
 			// The track played to its end: the next one joins it without a gap.
 			// The next radio station does too, without the click: a dead link
 			// is skipped quietly, often at night.
@@ -1003,6 +1148,9 @@ func musicStop() {
 	music.playing = false
 	music.paused = false
 	music.pcmBytes = 0
+	music.crossfade = nil
+	music.crossfadeNext, music.crossfadeOffset, music.crossfadeGen = 0, 0, 0
+	music.crossfadeLoading = 0
 	path, pos, dur := "", 0.0, 0.0
 	if music.current >= 0 && music.current < len(music.tracks) {
 		path, pos, dur = music.tracks[music.current].Path, music.position, music.duration
@@ -2034,10 +2182,11 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 			header += "s"
 		}
 	}
-	// A one-file book lists its own chapters instead (audiobook_chapters.go).
+	// A one-file book lists its own chapters instead (audiobook_chapters.go),
+	// and so does a podcast episode in a show queue.
 	var chapters []audioChapter
-	if len(tracks) == 1 && cur == 0 {
-		if chapters = audioChaptersFor(tracks[0].Path); len(chapters) > 0 {
+	if cur >= 0 && cur < len(tracks) && (len(tracks) == 1 || tracks[cur].Podcast) {
+		if chapters = audioChaptersFor(tracks[cur].Path); len(chapters) > 0 {
 			header = fmt.Sprintf("Chapters   ·   %d", len(chapters))
 		}
 	}

@@ -445,15 +445,15 @@ func sectrustBuildModel(config *Config, now time.Time) sectrustModel {
 	switch m.warnings {
 	case 0:
 		m.summary = "Nothing needs your attention"
-		m.sub = "Every row below explains what it covers. Press A on one for the details."
+		m.sub = hintSentence("Every row below explains what it covers. Press %s on one for the details.", "A", "Open")
 	case 1:
 		status, statusColor = "1 thing to review", ToastWarnInk()
 		m.summary = "1 thing to review"
-		m.sub = "The amber row has a fix. Press A on it to see what to do."
+		m.sub = hintSentence("The amber row has a fix. Press %s on it to see what to do.", "A", "Open")
 	default:
 		status, statusColor = fmt.Sprintf("%d things to review", m.warnings), ToastWarnInk()
 		m.summary = status
-		m.sub = "The amber rows have fixes. Press A on one to see what to do."
+		m.sub = hintSentence("The amber rows have fixes. Press %s on one to see what to do.", "A", "Open")
 	}
 	m.header = tbxHeader("Security & trust", "What this device protects, and what it exposes", "shield", status, statusColor)
 	return m
